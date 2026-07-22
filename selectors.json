@@ -1,0 +1,47 @@
+{
+  "_comment": "Host this file on GitHub and put its Raw URL in CONFIG.SELECTOR_URL. Only include keys you want to OVERRIDE — everything else falls back to the userscript defaults. Prefix XPath entries with 'xpath:' (or start them with //). First matching candidate wins.",
+
+  "chatgpt": {
+    "input": [
+      "#prompt-textarea",
+      "div.ProseMirror[contenteditable=\"true\"]",
+      "p[data-placeholder=\"Ask anything\"]"
+    ],
+    "send": [
+      "button[data-testid=\"send-button\"]",
+      "button[aria-label=\"Send prompt\"]"
+    ],
+    "generatedImage": [
+      "img[alt^=\"Generated image\"]",
+      "img[src*=\"backend-api/estuary/content\"]"
+    ]
+  },
+
+  "claude": {
+    "downloadButton": [
+      "xpath://button[.//span[normalize-space(text())=\"Download\"]]",
+      "xpath://a[.//span[normalize-space(text())=\"Download\"]]"
+    ]
+  },
+
+  "gemini": {
+    "input": [
+      "div.ql-editor[contenteditable=\"true\"]"
+    ],
+    "send": [
+      "xpath://button[.//mat-icon[@fonticon=\"arrow_upward\"]]"
+    ]
+  },
+
+  "flow": {
+    "newProject": [
+      "xpath://button[contains(., \"New project\")]"
+    ],
+    "videoThumbs": [
+      "img[src*=\"MEDIA_URL_TYPE_THUMBNAIL\"]"
+    ],
+    "download": [
+      "xpath://button[.//i[contains(text(),\"download\")]]"
+    ]
+  }
+}
