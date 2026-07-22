@@ -30,6 +30,10 @@
     ],
     "send": [
       "xpath://button[.//mat-icon[@fonticon=\"arrow_upward\"]]"
+    ],
+    "copyButton": [
+      "mat-icon[data-mat-icon-name=\"copy\"]",
+      "mat-icon[fonticon=\"copy\"]"
     ]
   },
 
