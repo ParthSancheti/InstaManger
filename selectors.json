@@ -51,9 +51,8 @@
       "div[data-slate-editor=\"true\"][contenteditable=\"true\"]"
     ],
     "create": [
-      "xpath://button[.//span[normalize-space(text())=\"Create\"] and .//i[contains(text(), \"arrow_forward\")]]",
-      "xpath://button[.//i[contains(@class, \"google-symbols\") and contains(text(), \"arrow_forward\")]]",
-      "xpath://i[contains(text(), \"arrow_forward\")]/ancestor::button[1]"
+      "xpath://i[normalize-space(text())=\"arrow_forward\"]/ancestor::button[1]",
+      "xpath://button[.//i[contains(text(), \"arrow_forward\")]]"
     ],
     "videoThumbs": [
       "img[src*=\"MEDIA_URL_TYPE_THUMBNAIL\"]"
