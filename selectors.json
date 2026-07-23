@@ -51,8 +51,8 @@
       "div[data-slate-editor=\"true\"][contenteditable=\"true\"]"
     ],
     "create": [
-      "xpath://button[.//i[text()=\"arrow_forward\"]]",
-      "xpath://button[.//i[contains(text(), \"arrow_forward\")]]"
+      "xpath://button[contains(., \"arrow_forward\")]",
+      "xpath://button[contains(., \"Create\")]"
     ],
     "approve": [
       "xpath://div[text()=\"Approve\"]/parent::div",
