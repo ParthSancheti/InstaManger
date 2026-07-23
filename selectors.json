@@ -51,11 +51,16 @@
       "div[data-slate-editor=\"true\"][contenteditable=\"true\"]"
     ],
     "create": [
-      "xpath://i[normalize-space(text())=\"arrow_forward\"]/ancestor::button[1]",
+      "xpath://button[.//i[text()=\"arrow_forward\"]]",
       "xpath://button[.//i[contains(text(), \"arrow_forward\")]]"
     ],
+    "approve": [
+      "xpath://div[text()=\"Approve\"]/parent::div",
+      "xpath://div[text()=\"Approve\"]"
+    ],
     "videoThumbs": [
-      "img[src*=\"MEDIA_URL_TYPE_THUMBNAIL\"]"
+      "video[src*=\"media.getMediaUrlRedirect\"]",
+      "[data-testid=\"virtuoso-item-list\"] video"
     ],
     "download": [
       "xpath://button[.//i[contains(text(),\"download\")]]"
