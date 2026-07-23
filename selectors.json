@@ -62,21 +62,44 @@
   },
 
   "elevenlabs": {
+    "voicePanelToggle": [
+      "xpath://label[normalize-space(text())=\"Voice\"]/following-sibling::div//button",
+      "button[data-testid=\"tts-voice-selector\"]",
+      "xpath://button[contains(@aria-label, \"Select voice\")]"
+    ],
     "exploreTab": [
-      "[data-testid=\"tabbed-voice-selector-explore-tab\"]"
+      "[data-testid=\"tabbed-voice-selector-explore-tab\"]",
+      "xpath://button[@role=\"tab\" and contains(., \"Explore\")]"
     ],
     "voiceSearch": [
-      "input[placeholder=\"Start typing to search...\"]"
+      "input[placeholder=\"Start typing to search...\"]",
+      "input[data-agent-id^=\"search-bar\"]"
+    ],
+    "voiceResult": [
+      "li.eleven-list-item button[data-type=\"list-item-trigger-overlay\"]",
+      "xpath:(//li[contains(@class, \"eleven-list-item\")])[1]//button"
     ],
     "modelSelector": [
       "[data-testid=\"tts-model-selector\"]"
+    ],
+    "modelV3": [
+      "xpath://div[contains(@class, \"border rounded-xl\") and contains(., \"Eleven v3\")]",
+      "xpath://p[normalize-space(text())=\"Eleven v3\"]/ancestor::div[contains(@class, \"border\")][1]"
+    ],
+    "input": [
+      "[data-testid=\"tts-editor\"] div[contenteditable=\"true\"]",
+      "[data-testid=\"tts-editor\"] [role=\"textbox\"]",
+      "[data-testid=\"tts-editor\"] div[data-node-view-content-react]"
     ],
     "generate": [
       "[data-testid=\"tts-generate\"]"
     ],
     "download": [
-      "xpath://path[contains(@d,\"M15.1875 11.0625V12.9375\")]/ancestor::button[1]",
-      "xpath://button[contains(@aria-label,\"Download\")]"
+      "xpath:(//button[@aria-label=\"Download\"])[1]",
+      "xpath:(//button[.//svg[contains(@viewBox, \"0 0 18 18\")]])[1]"
+    ],
+    "generating": [
+      "xpath://button[@data-testid=\"tts-generate\" and @data-loading=\"true\"]"
     ]
   }
 }
