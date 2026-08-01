@@ -1,0 +1,50 @@
+# =============================================================
+#  MAIN PIPELINE  —  main_orchestrator.py + browser_bridge.py
+#                    + telegram_bot.py
+#  These three are the only hard (module-level) imports.
+# =============================================================
+flask                    # browser_bridge.py
+requests                 # main_orchestrator.py, telegram_bot.py
+aiogram                  # telegram_bot.py
+tzdata                   # Windows missing IANA timezone databases
+
+
+# -------------------------------------------------------------
+#  OPTIONAL — imported lazily, inside functions.
+#  Missing = that one feature degrades, engine keeps running.
+# -------------------------------------------------------------
+pyperclip                # /get-clipboard (Gemini copy path)
+                         #   on Windows there is a PowerShell
+                         #   fallback, so this is convenience only
+psutil                   # Chrome process detection
+pyautogui                # window focus + Ctrl+V paste
+
+praw                     # Reddit growth scan — main_orchestrator.py:813
+                         #   already degrades gracefully:
+                         #   "[growth] praw not installed — skipped"
+                         #   SKIP THIS until you have API access
+
+google-api-python-client # YouTube Shorts upload only
+google-auth-oauthlib     #   (main_orchestrator.py:450-453, lazy)
+
+# =============================================================
+#  yt-dlp — used by run_clone() in main_orchestrator.py, invoked
+#  as `python -m yt_dlp`, so it must be importable but is never
+#  imported at module level.
+# =============================================================
+yt-dlp
+
+# =============================================================
+#  moviepy — REQUIRED for the 15s news story clip
+#  (banner + music -> vertical mp4) and for test_suite T12.
+#  Works with moviepy 1.x and 2.x; needs ffmpeg on PATH.
+#  If ffmpeg is awkward to install: pip install imageio-ffmpeg
+# =============================================================
+moviepy
+
+# =============================================================
+#  requests-oauthlib — Twitter/X posting (OAuth 1.0a).
+#  Only needed once you add the four TWITTER_* keys; the code
+#  degrades gracefully without it.
+# =============================================================
+requests-oauthlib

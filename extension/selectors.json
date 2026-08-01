@@ -1,0 +1,137 @@
+{
+  "_comment": "Host this on GitHub, put the Raw URL in SELECTOR_URL inside extension/background.js. Only include keys you want to OVERRIDE — everything else falls back to the built-in defaults in content.js. Prefix XPath entries with 'xpath:' (or start them with //). First matching candidate wins.",
+  "chatgpt": {
+    "input": [
+      "#prompt-textarea",
+      "div.ProseMirror[contenteditable=\"true\"]",
+      "p[data-placeholder=\"Ask anything\"]"
+    ],
+    "send": [
+      "button[data-testid=\"send-button\"]",
+      "button[aria-label=\"Send prompt\"]"
+    ],
+    "generatedImage": [
+      "img[alt^=\"Generated image\"]",
+      "img[src*=\"backend-api/estuary/content\"]"
+    ]
+  },
+  "claude": {
+    "downloadButton": [
+      "xpath://button[.//span[normalize-space(text())=\"Download\"]]",
+      "xpath://a[.//span[normalize-space(text())=\"Download\"]]"
+    ],
+    "skipButton": [
+      "xpath://button[.//span[normalize-space(text())=\"Skip\"]]",
+      "xpath://*[self::button or self::a][normalize-space(.)=\"Skip\"]"
+    ]
+  },
+  "gemini": {
+    "input": [
+      "div.ql-editor[contenteditable=\"true\"]"
+    ],
+    "send": [
+      "xpath://button[.//mat-icon[@fonticon=\"arrow_upward\"]]"
+    ],
+    "attachment": [
+      "uploader-file-preview",
+      "[data-test-id=\"file-preview\"]",
+      "xpath://div[contains(@class,\"file-preview\")]"
+    ],
+    "responseText": [
+      "p[data-path-to-node=\"0\"]",
+      "xpath:(//p[contains(text(), '{')])[last()]"
+    ],
+    "copyButton": [
+      "mat-icon[data-mat-icon-name=\"copy\"]",
+      "button[aria-label=\"Copy\"]"
+    ]
+  },
+  "flow": {
+    "newProject": [
+      "xpath://button[contains(., \"New project\")]",
+      "xpath://button[contains(., \"Start\")]"
+    ],
+    "input": [
+      "div[data-slate-editor=\"true\"][contenteditable=\"true\"]",
+      "xpath://div[@contenteditable=\"true\" and contains(@class, \"editor\")]",
+      "xpath://textarea[contains(@placeholder, \"prompt\")]",
+      "xpath://div[@role=\"textbox\" and @contenteditable=\"true\"]",
+      "xpath://div[@contenteditable=\"true\"]"
+    ],
+    "create": [
+      "xpath://button[contains(., \"arrow_forward\")]",
+      "xpath://button[contains(., \"arrow_upward\")]",
+      "xpath://button[.//i[contains(., \"send\")]]",
+      "xpath://button[contains(., \"Generate\")]",
+      "xpath://button[contains(@aria-label, \"Generate\")]",
+      "xpath://button[contains(@aria-label, \"Create\") and not(contains(., \"add_2\"))]",
+      "xpath://button[contains(., \"Create\") and not(contains(., \"add_2\"))]"
+    ],
+    "approve": [
+      "xpath://div[text()=\"Approve\"]/parent::div",
+      "xpath://div[text()=\"Approve\"]"
+    ],
+    "videoThumbs": [
+      "video[src*=\"media.getMediaUrlRedirect\"]",
+      "[data-testid=\"virtuoso-item-list\"] video",
+      "video"
+    ],
+    "download": [
+      "xpath://div[@role=\"dialog\"]//button[.//path[contains(@d, \"11.0625\")]]",
+      "xpath://button[.//i[contains(text(),\"download\")]]"
+    ],
+    "back": [
+      "xpath://button[.//i[contains(text(), \"arrow_back\")]]",
+      "xpath://button[.//i[contains(text(), \"close\")]]",
+      "xpath://button[@aria-label=\"Close\"]",
+      "xpath://button[@aria-label=\"Back\"]",
+      "button.close",
+      "xpath://div[@role=\"dialog\"]//button",
+      "xpath://button[contains(@class, \"close\")]"
+    ]
+  },
+  "elevenlabs": {
+    "voicePanelToggle": [
+      "xpath://label[normalize-space(text())=\"Voice\"]/following-sibling::div//button",
+      "button[data-testid=\"tts-voice-selector\"]",
+      "xpath://button[contains(@aria-label, \"Select voice\")]"
+    ],
+    "exploreTab": [
+      "[data-testid=\"tabbed-voice-selector-explore-tab\"]",
+      "xpath://button[@role=\"tab\" and contains(., \"Explore\")]"
+    ],
+    "voiceSearch": [
+      "input[placeholder=\"Start typing to search...\"]",
+      "input[data-agent-id^=\"search-bar\"]"
+    ],
+    "voiceResult": [
+      "li.eleven-list-item button[data-type=\"list-item-trigger-overlay\"]",
+      "xpath:(//li[contains(@class, \"eleven-list-item\")])[1]//button"
+    ],
+    "modelSelector": [
+      "[data-testid=\"tts-model-selector\"]"
+    ],
+    "modelV3": [
+      "xpath://div[contains(@class, \"border rounded-xl\") and contains(., \"Eleven v3\")]",
+      "xpath://p[normalize-space(text())=\"Eleven v3\"]/ancestor::div[contains(@class, \"border\")][1]"
+    ],
+    "input": [
+      "[data-testid=\"tts-editor\"] div[contenteditable=\"true\"]",
+      "[data-testid=\"tts-editor\"] [role=\"textbox\"]",
+      "[data-testid=\"tts-editor\"] div[data-node-view-content-react]"
+    ],
+    "generate": [
+      "[data-testid=\"tts-generate\"]"
+    ],
+    "download": [
+      "xpath:(//*[local-name()='path' and contains(@d, \"11.0625V12.9375C15.1875\")]/ancestor::*[self::button or self::a or @role='button'])[1]",
+      "xpath:(//*[local-name()='svg' and .//*[local-name()='path' and contains(@d, \"11.0625\")]])[1]",
+      "xpath:(//button[.//path[contains(@d, \"M15.187\")]])[1]",
+      "xpath:(//button[@aria-label=\"Download\"])[1]",
+      "xpath:(//button[.//svg[contains(@viewBox, \"0 0 18 18\")]])[1]"
+    ],
+    "generating": [
+      "xpath://button[@data-testid=\"tts-generate\" and @data-loading=\"true\"]"
+    ]
+  }
+}

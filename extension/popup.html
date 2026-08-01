@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <div class="dashboard-container">
+    <div class="header">
+      <img src="icon.png" class="logo-pulse" />
+      <div class="header-text">
+        <h1>STOCK WARRIOR</h1>
+        <div class="badge" id="server-badge">Connecting...</div>
+      </div>
+    </div>
+    
+    <div class="ai-grid">
+      <div class="ai-card" id="card-chatgpt">
+        <div class="card-icon">🧠</div>
+        <div class="card-info">
+          <h3>ChatGPT</h3>
+          <p class="status-text">Checking...</p>
+        </div>
+        <div class="status-dot"></div>
+      </div>
+
+      <div class="ai-card" id="card-gemini">
+        <div class="card-icon">⚡</div>
+        <div class="card-info">
+          <h3>Gemini</h3>
+          <p class="status-text">Checking...</p>
+        </div>
+        <div class="status-dot"></div>
+      </div>
+
+      <div class="ai-card" id="card-claude">
+        <div class="card-icon">📖</div>
+        <div class="card-info">
+          <h3>Claude</h3>
+          <p class="status-text">Checking...</p>
+        </div>
+        <div class="status-dot"></div>
+      </div>
+
+      <div class="ai-card" id="card-flow">
+        <div class="card-icon">🎬</div>
+        <div class="card-info">
+          <h3>Google Flow</h3>
+          <p class="status-text">Checking...</p>
+        </div>
+        <div class="status-dot"></div>
+      </div>
+
+      <div class="ai-card" id="card-elevenlabs">
+        <div class="card-icon">🎙️</div>
+        <div class="card-info">
+          <h3>ElevenLabs</h3>
+          <p class="status-text">Checking...</p>
+        </div>
+        <div class="status-dot"></div>
+      </div>
+    </div>
+
+    <div class="stats-panel">
+      <div class="stat">
+        <span class="label">Pending Tasks</span>
+        <span class="value" id="task-count">0</span>
+      </div>
+      <div class="stat">
+        <span class="label">Last Poll</span>
+        <span class="value" id="last-poll">0s</span>
+      </div>
+    </div>
+  </div>
+  <script src="popup.js"></script>
+</body>
+</html>

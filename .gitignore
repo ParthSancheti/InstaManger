@@ -1,0 +1,32 @@
+# Secrets & Tokens
+.env
+yt_token.json
+client_secret.json
+ig_token.txt
+google_creds.json
+cookies.txt
+warrior.db
+
+# Virtual Environments & Python Caches
+__pycache__/
+*.pyc
+venv/
+.env/
+env/
+
+# Output folders
+output/
+music/
+test_output/
+
+# Logs & temp
+*.log
+*.tmp
+temp/
+
+# Browser Data
+chrome-profile/
+
+# SQLite sidecars
+warrior.db-shm
+warrior.db-wal

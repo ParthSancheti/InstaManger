@@ -1,0 +1,54 @@
+{
+  "manifest_version": 3,
+  "name": "AI Automation Connector",
+  "version": "5.0.0",
+  "description": "Bridges ChatGPT / Claude / Gemini / Google Flow / ElevenLabs with the local Python automation server (localhost:5000). v5: Flow multi-video fix, continuous Approve watcher, OS-focus paste.",
+  "background": {
+    "service_worker": "background.js"
+  },
+  "permissions": [
+    "tabs",
+    "scripting",
+    "downloads",
+    "storage",
+    "alarms"
+  ],
+  "host_permissions": [
+    "http://localhost:5000/*",
+    "http://127.0.0.1:5000/*",
+    "https://raw.githubusercontent.com/*",
+    "*://chatgpt.com/*",
+    "*://chat.openai.com/*",
+    "*://claude.ai/*",
+    "*://gemini.google.com/*",
+    "*://labs.google/*",
+    "*://elevenlabs.io/*"
+  ],
+  "content_scripts": [
+    {
+      "matches": [
+        "*://chatgpt.com/*",
+        "*://chat.openai.com/*",
+        "*://claude.ai/*",
+        "*://gemini.google.com/*",
+        "*://labs.google/*",
+        "*://elevenlabs.io/*"
+      ],
+      "js": [
+        "content.js"
+      ],
+      "run_at": "document_idle"
+    }
+  ],
+  "action": {
+    "default_title": "Stock Warrior Connector",
+    "default_popup": "popup.html",
+    "default_icon": {
+      "128": "icon.png"
+    }
+  },
+  "icons": {
+    "128": "icon.png"
+  },
+  "minimum_chrome_version": "120"
+}
