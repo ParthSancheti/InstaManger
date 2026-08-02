@@ -74,8 +74,11 @@ ENV = load_env()
 TOKEN = ENV.get("TELEGRAM_BOT_TOKEN", "")
 ADMIN = int(ENV.get("TELEGRAM_ADMIN_ID", "0") or 0)
 
-if not TOKEN or not ADMIN:
-    raise SystemExit("Set TELEGRAM_BOT_TOKEN and TELEGRAM_ADMIN_ID in .env first.")
+missing = []
+if not TOKEN: missing.append("TELEGRAM_BOT_TOKEN")
+if not ADMIN: missing.append("TELEGRAM_ADMIN_ID")
+if missing:
+    raise SystemExit(f"Missing required configuration: {', '.join(missing)}. Set them in .env first.")
 
 
 def store() -> dict:
