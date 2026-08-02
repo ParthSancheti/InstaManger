@@ -92,6 +92,13 @@ def db() -> sqlite3.Connection:
     return c
 
 
+def get_state(key: str, default: str = "") -> str:
+    """Read the orchestrator's state table (shared warrior.db)."""
+    with db() as c:
+        row = c.execute("SELECT value FROM state WHERE key=?", (key,)).fetchone()
+    return row["value"] if row else default
+
+
 def queue_cmd(cmd: str, arg: str = "") -> None:
     with db() as c:
         c.execute("INSERT INTO botcmd(dt,cmd,arg) VALUES(?,?,?)",
@@ -124,7 +131,7 @@ dp.include_router(telegram_ui.init(store, save_store, db,
 
 # Test Lab: run every step and every workflow on demand, no schedule waiting.
 import telegram_testlab
-dp.include_router(telegram_testlab.init(queue_cmd, ADMIN))
+dp.include_router(telegram_testlab.init(queue_cmd, ADMIN, get_state))
 
 
 def admin_only(obj) -> bool:

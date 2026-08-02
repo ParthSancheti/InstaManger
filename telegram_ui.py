@@ -332,14 +332,16 @@ TOKEN_SPECS = {
         "label": "Meta (IG/FB) access token",
         "help": "Graph API token for Instagram + Facebook publishing. From Meta for Developers.",
         "icon": "📸"},
-    "IG_BUSINESS_ID": {
+    "META_IG_ACCOUNT_ID": {
         "label": "Instagram business ID",
-        "help": "Numeric IG business account ID the token posts to.",
+        "help": "Numeric IG business account ID the token posts to. (This is the name "
+                "the engine actually reads — the old IG_BUSINESS_ID was ignored.)",
         "icon": "📸"},
-    "YT_CHANNEL_ID": {
-        "label": "YouTube channel ID",
-        "help": "Target channel for Shorts. (OAuth client_secret.json still lives as a file.)",
-        "icon": "▶️"},
+    "IMGBB_API_KEY": {
+        "label": "ImgBB key (image hosting)",
+        "help": "Meta downloads media from a public URL. Free key from api.imgbb.com — "
+                "without it, image publishing falls back to an anonymous host.",
+        "icon": "🖼"},
     "IG_SESSIONID": {
         "label": "Instagram sessionid cookie",
         "help": "Used by the downloader for reel cloning. From your logged-in IG cookies.",

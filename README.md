@@ -77,6 +77,33 @@ python main_orchestrator.py --test all            # full suite (generates + publ
 
 ---
 
+## Stopping and restarting
+
+Closing the console window does **not** kill `browser_bridge.py` and
+`telegram_bot.py` — they are separate processes. The old bridge keeps port 5000
+and the old bot keeps the Telegram long-poll, so the next start looks dead.
+That is why stopping used to mean deleting the database.
+
+Every boot now does this automatically:
+
+1. kills child processes left by the previous run (tracked in `.warrior_pids.json`)
+2. calls `deleteWebhook(drop_pending_updates)` to free a stale Telegram poll
+3. requeues tasks stranded in `running`, retries interrupted panel commands once,
+   expires orphaned approval cards
+4. restarts the bridge if it is up but has no Chrome behind it
+
+Ctrl-C and SIGTERM also take the children down with them.
+
+If something still looks stuck:
+
+```bash
+python main_orchestrator.py --reset     # never delete warrior.db again
+```
+
+`--reset` keeps your calendar, history and performance data.
+
+---
+
 ## Test Lab — stop waiting for the schedule
 
 The panel's **Test Lab** runs anything on demand; nothing waits for a slot.
@@ -87,6 +114,20 @@ The panel's **Test Lab** runs anything on demand; nothing waits for a slot.
 | **Steps** | One connector or one publisher alone (Gemini, image, PDF, video, TTS, clip, IG Story/post/Reel, YouTube, Twitter, TG text/photo/poll) | One generation |
 | **Live** | The full pipeline, real generation, real publish, right now | Full |
 | **Preflight** | Config readiness report: tokens, bridge, prompts, schemas, routing | Free |
+
+Results are stored, so you never have to re-run the whole suite to check a fix:
+
+* **Re-run failed only** — retries exactly what failed last time, nothing else.
+* **Pick tests to run** — a toggle grid; anything that failed last run is marked
+  with an X. Bulk select All / None / Failed, then run just those.
+
+Partial runs *merge* into the stored results, so re-testing one item does not
+erase the other outstanding failures.
+
+```bash
+python main_orchestrator.py --test failed              # only last run's failures
+python main_orchestrator.py --test ig_reel,youtube     # a specific list
+```
 
 Use **Dry run** while fixing bugs. It walks the exact same code path, so a
 missing key blows up in seconds instead of at 6pm three days later.
@@ -100,7 +141,7 @@ Every failure — anywhere in the engine — comes back decoded:
 
 | Content | Instagram | YouTube | Twitter | Telegram |
 |---|---|---|---|---|
-| News | **Story** (banner + music, 15s) + feed | - | yes* | yes |
+| News | **Story** (banner over stock video + music, 15s) + feed | - | yes* | yes |
 | Carousel | Feed | - | yes* (first 4 slides) | yes |
 | Reel | Reel | Short | off | yes (Telemanager context copy) |
 | PDF | - | - | - | **always** |
@@ -113,6 +154,37 @@ read-only; posting needs the four OAuth 1.0a keys (`TWITTER_API_KEY`,
 
 Instagram Stories require an Instagram **Business** account with
 `instagram_content_publish`.
+
+### Media hosting (important)
+
+Meta does not accept an upload — it downloads the file from a public URL you
+give it. Images use **ImgBB** when `IMGBB_API_KEY` is set. Video has no ImgBB
+equivalent, so it tries **catbox.moe -> tmpfiles.org -> 0x0.st** in order and
+verifies the resulting URL is really fetchable before handing it to Meta. This
+is why an image post can succeed while a Reel or Story fails: they take
+different hosting paths.
+
+`PEXELS_API_KEY` supplies stock footage for the story background. It is a
+*source* of b-roll, not a host — it cannot serve your own renders to Meta.
+
+### Direct upload — the actual fix for video
+
+ImgBB hosts **images only**. There is no equally reliable free host for video,
+which is exactly why a photo post can succeed in the same run where a Reel and a
+Story both fail.
+
+Set `IG_USERNAME` and `IG_PASSWORD` and install `instagrapi`. Reels and Stories
+then upload **straight to Instagram's private mobile API** whenever Graph fails —
+the file is POSTed directly and no public URL exists at any point.
+
+Order is always: **Graph first, direct upload only as a fallback.** If both
+fail, the original Graph error is what you see, not the fallback's.
+
+Caveats, stated plainly: instagrapi is unofficial, it needs your real password,
+and Instagram may raise a login challenge (approve it on your phone). The
+session is cached in `ig_session.json` to avoid repeated logins, which is what
+usually triggers challenges. Turn it off with `settings.instagrapi_fallback`.
+Test it with **Test Lab → 🔧 Steps → IG direct upload login**.
 
 Edit routing in `prompts_store.json` -> `routing`.
 

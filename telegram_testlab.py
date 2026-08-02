@@ -26,12 +26,28 @@ router = Router()
 
 _queue_cmd = None       # injected from telegram_bot.py
 _guard_admin = 0
+_get_state = None       # reads warrior.db state, for last-run results
+_picked: set[str] = set()   # custom selection, per-admin (single-user panel)
 
 
-def init(queue_cmd_fn, admin_id: int) -> Router:
-    global _queue_cmd, _guard_admin
-    _queue_cmd, _guard_admin = queue_cmd_fn, admin_id
+def init(queue_cmd_fn, admin_id: int, get_state_fn=None) -> Router:
+    global _queue_cmd, _guard_admin, _get_state
+    _queue_cmd, _guard_admin, _get_state = queue_cmd_fn, admin_id, get_state_fn
     return router
+
+
+def _last_results() -> list[dict]:
+    if not _get_state:
+        return []
+    try:
+        import json
+        return json.loads(_get_state("last_test_results", "[]"))
+    except Exception:
+        return []
+
+
+def _last_failed() -> list[dict]:
+    return [r for r in _last_results() if r.get("ok") is False]
 
 
 def _ok(obj) -> bool:
@@ -69,6 +85,8 @@ async def tl_home(q: CallbackQuery):
             [("🚦 Preflight check", "tl_pre")],
             [("🧪 Dry runs", "tl_dry"), ("🔧 Steps", "tl_steps")],
             [("🚀 Live workflows", "tl_live")],
+            [(f"🔁 Re-run failed only ({len(_last_failed())})", "tl_failed")],
+            [("🎯 Pick tests to run", "tl_pick")],
             [("▶️ Run ALL tests (cheap)", "tl_all_cheap")],
             [("💥 Run ALL tests (full, spends generations)", "tl_all_full")],
             [("⬅️ Back", "home")]]))
@@ -144,11 +162,94 @@ async def tl_dry_go(q: CallbackQuery):
 # Individual steps
 # ---------------------------------------------------------------------------
 
+@router.callback_query(F.data == "tl_failed")
+async def tl_failed(q: CallbackQuery):
+    if not _ok(q):
+        return await q.answer()
+    bad = _last_failed()
+    if not bad:
+        await q.answer("Nothing failed last run ✅", show_alert=True)
+        return
+    _queue_cmd("test_failed")
+    await q.answer("Re-running…")
+    await q.message.answer(
+        "🔁 <b>Re-running only the failures</b>\n"
+        + "\n".join(f"• {r.get('label') or r['name']}" for r in bad),
+        parse_mode="HTML")
+
+
+@router.callback_query(F.data == "tl_pick")
+async def tl_pick(q: CallbackQuery):
+    if not _ok(q):
+        return await q.answer()
+    await _render_pick(q)
+    await q.answer()
+
+
+async def _render_pick(q: CallbackQuery):
+    last = {r["name"]: r for r in _last_results()}
+    rows = []
+    for row in STEP_ROWS:
+        line = []
+        for label, name in row:
+            mark = "✅" if name in _picked else "⬜"
+            prev = last.get(name, {}).get("ok")
+            hint = "" if prev is None and name not in last else ("❌" if prev is False else "")
+            line.append((f"{mark}{hint} {label}", f"tl_p:{name}"))
+        rows.append(line)
+    rows.append([("☑️ All", "tl_pall"), ("✖️ None", "tl_pnone"),
+                 ("❌ Failed", "tl_pfail")])
+    rows.append([(f"▶️ Run selected ({len(_picked)})", "tl_prun")])
+    rows.append([("⬅️ Back", "tl_home")])
+    await q.message.edit_text(
+        "🎯 <b>Pick tests to run</b>\n\n"
+        "Tap to toggle. ❌ marks what failed on the last run.\n"
+        "Then hit <b>Run selected</b> — nothing else gets touched.",
+        parse_mode="HTML", reply_markup=kb(rows))
+
+
+@router.callback_query(F.data.startswith("tl_p:"))
+async def tl_pick_toggle(q: CallbackQuery):
+    if not _ok(q):
+        return await q.answer()
+    name = q.data.split(":", 1)[1]
+    _picked.discard(name) if name in _picked else _picked.add(name)
+    await _render_pick(q)
+    await q.answer()
+
+
+@router.callback_query(F.data.in_({"tl_pall", "tl_pnone", "tl_pfail"}))
+async def tl_pick_bulk(q: CallbackQuery):
+    if not _ok(q):
+        return await q.answer()
+    _picked.clear()
+    if q.data == "tl_pall":
+        _picked.update(n for row in STEP_ROWS for _, n in row)
+    elif q.data == "tl_pfail":
+        _picked.update(r["name"] for r in _last_failed())
+    await _render_pick(q)
+    await q.answer()
+
+
+@router.callback_query(F.data == "tl_prun")
+async def tl_pick_run(q: CallbackQuery):
+    if not _ok(q):
+        return await q.answer()
+    if not _picked:
+        await q.answer("Nothing selected", show_alert=True)
+        return
+    _queue_cmd("test_pick:" + ",".join(sorted(_picked)))
+    await q.answer("Running…")
+    await q.message.answer(f"🎯 Running {len(_picked)} selected test(s): "
+                           f"<code>{', '.join(sorted(_picked))}</code>", parse_mode="HTML")
+
+
 STEP_ROWS = [
     [("🔌 Bridge", "bridge"), ("🧠 Gemini", "gemini")],
     [("🖼 ChatGPT image", "image"), ("📄 Claude PDF", "pdf")],
     [("🎬 Flow video", "video"), ("🎤 ElevenLabs", "tts")],
-    [("🎞 15s news clip", "clip"), ("🔑 Meta token", "meta_token")],
+    [("🎞 15s news clip", "clip"), ("🎥 Pexels stock", "pexels")],
+    [("🔑 Meta token", "meta_token")],
     [("📸 IG Story", "ig_story"), ("🖼 IG post", "ig_post")],
     [("🎬 IG Reel", "ig_reel"), ("▶️ YouTube", "youtube")],
     [("🐦 Twitter", "twitter"), ("💬 TG text", "tg_text")],

@@ -1,0 +1,6 @@
+# Lint config for the Stock Warrior codebase.
+line-length = 120
+
+[lint]
+select = ["F", "E9", "B"]
+ignore = ["E501"]

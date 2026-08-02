@@ -34,7 +34,9 @@
     "healer_auto_apply": false,
     "news_clip_seconds": 15,
     "news_clip_music": true,
-    "dry_run": false
+    "dry_run": false,
+    "news_clip_stock_bg": true,
+    "instagrapi_fallback": true
   },
   "routing": {
     "reel": {

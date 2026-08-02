@@ -48,3 +48,12 @@ moviepy
 #  degrades gracefully without it.
 # =============================================================
 requests-oauthlib
+
+# =============================================================
+#  instagrapi — DIRECT upload fallback for Reels and Stories.
+#  Graph downloads media from a public URL; ImgBB is images-only
+#  and free video hosts are unreliable, so this uploads the file
+#  straight to Instagram instead. Needs IG_USERNAME + IG_PASSWORD.
+#  Optional: without it, video publishing depends on hosting.
+# =============================================================
+instagrapi
