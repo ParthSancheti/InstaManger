@@ -277,6 +277,7 @@ def ask_gemini(prompt: str, *, schema_key: str | None = None,
     """Gemini connector call → parsed + schema-checked JSON.
     THE lifeblood of the engine — every agent thinks through this."""
     last_exc: Exception | None = None
+    healed = False          # L8: heal ONCE per call, not once per retry
     for attempt in range(retries + 1):
         try:
             data = bridge_task("gemini", prompt, chat_code=chat_code)
@@ -291,7 +292,9 @@ def ask_gemini(prompt: str, *, schema_key: str | None = None,
             return parsed
         except BridgeError as exc:
             last_exc = exc
-            on_bridge_failure("gemini", str(exc))
+            if not healed:
+                healed = True
+                on_bridge_failure("gemini", str(exc))
             time.sleep(10)
         except (json.JSONDecodeError, ValueError) as exc:
             last_exc = exc
@@ -526,13 +529,15 @@ def tg_channel_text(text: str, pin: bool = False) -> None:
         _tg("pinChatMessage", {"chat_id": TG_CHANNEL, "message_id": j["result"]["message_id"]})
 
 
-def tg_channel_file(path: str, caption: str, kind: str = "document") -> None:
+def tg_channel_file(path: str, caption: str, kind: str = "document") -> dict:
+    """Returns the Telegram response so callers can pin, edit or reply to it."""
     method = {"photo": "sendPhoto", "video": "sendVideo",
               "voice": "sendVoice", "document": "sendDocument"}[kind]
     field = {"photo": "photo", "video": "video", "voice": "voice", "document": "document"}[kind]
     with open(path, "rb") as f:
-        _tg(method, {"chat_id": TG_CHANNEL, "caption": caption[:1000], "parse_mode": "Markdown"},
-            files={field: f})
+        return _tg(method,
+                   {"chat_id": TG_CHANNEL, "caption": caption[:1000],
+                    "parse_mode": "Markdown"}, files={field: f})
 
 
 def tg_channel_poll(question: str, options: list[str]) -> None:
@@ -785,6 +790,7 @@ def publish_instagram_reel(path: str, caption: str) -> str | None:
 
 
 def _publish_reel_graph(path: str, caption: str) -> str | None:
+    path = normalize_for_meta(path)
     url = _host_file(path)
     cid = None
     for attempt in range(3):                                       # transient 5xx retry
@@ -888,6 +894,8 @@ def publish_instagram_story(path: str, *, is_video: bool | None = None) -> str |
 
 
 def _publish_story_graph(path: str, is_video: bool) -> str | None:
+    if is_video:
+        path = normalize_for_meta(path)
     url = _host_file(path)
     data = {"media_type": "STORIES", "access_token": META_TOKEN}
     data["video_url" if is_video else "image_url"] = url
@@ -1106,14 +1114,9 @@ def build_news_clip(image_path: str, out_path: str, seconds: int | None = None,
     clip = CompositeVideoClip(layers, size=(W, H))
     clip = call(clip, ("with_duration", "set_duration"), seconds)
 
-    track = None
-    if s.get("news_clip_music", True):
-        tracks = sorted(MUSIC_DIR.glob("*.mp3"))
-        library = store().get("music_library", [])
-        pool = [t for t in tracks if t.name in library] or tracks
-        if pool:
-            import random
-            track = random.choice(pool)
+    # Round-robin through music/news/ so the whole library gets used instead of
+    # the same track repeating (ported from course_bot's music manager).
+    track = get_next_song("news") if s.get("news_clip_music", True) else None
     if track:
         try:
             audio = AudioFileClip(str(track))
@@ -1123,11 +1126,12 @@ def build_news_clip(image_path: str, out_path: str, seconds: int | None = None,
             except RuntimeError:
                 pass                                # volume control is optional
             clip = call(clip, ("with_audio", "set_audio"), audio)
-            log(f"  [clip] music: {track.name}")
+            log(f"  [clip] 🎵 {Path(track).name}")
         except Exception as exc:
             log(f"  [clip] music failed ({exc}) — silent clip")
     else:
-        log("  [clip] no music in music/ — silent clip")
+        log("  [clip] no mp3 in music/news/ — silent clip. "
+            "Send an .mp3 to the panel's 🎵 Music screen.")
 
     Path(out_path).parent.mkdir(parents=True, exist_ok=True)
     kwargs = {"fps": 24, "codec": "libx264", "audio_codec": "aac", "logger": None}
@@ -1311,6 +1315,188 @@ def full_reset() -> None:
     log("🧹 reset complete — safe to start normally now")
 
 
+def _ffmpeg_bin() -> str:
+    """ffmpeg on PATH, else the one imageio-ffmpeg bundles."""
+    from shutil import which
+    if which("ffmpeg"):
+        return "ffmpeg"
+    try:
+        import imageio_ffmpeg
+        return imageio_ffmpeg.get_ffmpeg_exe()
+    except Exception as exc:
+        raise RuntimeError(
+            "ffmpeg not found. Install it, or `pip install imageio-ffmpeg`.") from exc
+
+
+def probe_video(path: str) -> dict:
+    """codec / pix_fmt / fps / duration / audio — used to explain rejections."""
+    from shutil import which
+    exe = "ffprobe" if which("ffprobe") else None
+    if not exe:
+        return {}
+    try:
+        out = subprocess.run(
+            [exe, "-v", "error", "-show_entries",
+             "stream=codec_type,codec_name,pix_fmt,r_frame_rate,sample_rate,channels",
+             "-show_entries", "format=duration,size", "-of", "json", path],
+            capture_output=True, text=True, timeout=60).stdout
+        j = json.loads(out or "{}")
+        info: dict = {"duration": float((j.get("format") or {}).get("duration") or 0),
+                      "size": int((j.get("format") or {}).get("size") or 0)}
+        for st in j.get("streams", []):
+            if st.get("codec_type") == "video":
+                info["vcodec"] = st.get("codec_name")
+                info["pix_fmt"] = st.get("pix_fmt")
+                num, _, den = (st.get("r_frame_rate") or "0/1").partition("/")
+                info["fps"] = round(int(num) / max(int(den or 1), 1), 2)
+            elif st.get("codec_type") == "audio":
+                info["acodec"] = st.get("codec_name")
+                info["sample_rate"] = int(st.get("sample_rate") or 0)
+                info["channels"] = st.get("channels")
+        return info
+    except Exception:
+        return {}
+
+
+def normalize_for_meta(path: str, out_path: str | None = None) -> str:
+    """Re-encode to EXACTLY what Instagram accepts. This is why Reels and
+    Stories were failing with 'processing ERROR' while image posts worked.
+
+    Meta's published spec for Reels and Stories:
+      * container MP4/MOV, **no edit lists, moov atom at the FRONT**
+        -> `-movflags +faststart`. Google Flow writes moov at the end, so Meta
+           downloads the file, cannot parse it, and reports ERROR.
+      * video H.264, progressive, closed GOP, **4:2:0 chroma** -> yuv420p
+      * frame rate 23-60 fps
+      * audio **AAC, <=48 kHz, 1-2 channels** — a video with NO audio track is
+        a common rejection too, so silence is added when it's missing.
+    """
+    src = Path(path)
+    if not src.exists():
+        raise PublishError(f"Cannot normalise — {path} does not exist.")
+    out = Path(out_path or src.with_name(src.stem + "_meta.mp4"))
+    info = probe_video(str(src))
+    has_audio = bool(info.get("acodec"))
+    fps = info.get("fps") or 30
+    fps = 30 if not (23 <= fps <= 60) else fps
+
+    cmd = [_ffmpeg_bin(), "-y", "-i", str(src)]
+    if not has_audio:
+        # silent AAC track — Meta rejects a fair number of audioless uploads
+        cmd += ["-f", "lavfi", "-i", "anullsrc=channel_layout=stereo:sample_rate=48000",
+                "-shortest"]
+    cmd += [
+        "-c:v", "libx264", "-profile:v", "high", "-level", "4.1",
+        "-pix_fmt", "yuv420p",                  # 4:2:0 chroma subsampling
+        "-r", str(int(fps)),
+        "-g", str(int(fps) * 2), "-keyint_min", str(int(fps)),
+        "-sc_threshold", "0",                   # closed GOP
+        "-vf", "scale=1080:1920:force_original_aspect_ratio=decrease,"
+               "pad=1080:1920:(ow-iw)/2:(oh-ih)/2:black,setsar=1",
+        "-b:v", "6M", "-maxrate", "8M", "-bufsize", "12M",
+        "-c:a", "aac", "-b:a", "128k", "-ar", "48000", "-ac", "2",
+        "-movflags", "+faststart",              # moov atom to the FRONT
+        str(out)]
+    log(f"  [ffmpeg] normalising {src.name} for Meta "
+        f"(was {info.get('vcodec', '?')}/{info.get('pix_fmt', '?')} "
+        f"{info.get('fps', '?')}fps, audio={info.get('acodec') or 'NONE'})")
+    r = subprocess.run(cmd, capture_output=True, text=True, timeout=900)
+    if r.returncode != 0 or not out.exists():
+        raise PublishError("ffmpeg could not normalise the video for Instagram: "
+                           + (r.stderr or "")[-400:])
+    after = probe_video(str(out))
+    log(f"  [ffmpeg] ✅ {after.get('vcodec')}/{after.get('pix_fmt')} "
+        f"{after.get('fps')}fps {after.get('duration', 0):.1f}s "
+        f"audio={after.get('acodec')} ({out.stat().st_size // 1024} KB)")
+    return str(out)
+
+
+def concat_videos(paths: list[str], out_path: str) -> str:
+    """Join Flow's clips into one reel.
+
+    Flow returns TWO ~10s generations — scene 1 and scene 2 of the God Prompt.
+    Only the first was ever downloaded and published, so half of every reel was
+    silently thrown away. They are joined in order here.
+    """
+    real = [p for p in paths if p and Path(p).exists() and Path(p).stat().st_size > 1000]
+    if not real:
+        raise RuntimeError("No usable video clips to join.")
+    if len(real) == 1:
+        log("  [concat] only one clip came back — using it as-is")
+        return real[0]
+    try:
+        try:
+            from moviepy.editor import VideoFileClip, concatenate_videoclips
+        except ModuleNotFoundError:
+            from moviepy import VideoFileClip, concatenate_videoclips
+    except ImportError as exc:
+        raise RuntimeError("moviepy is required to join the reel clips.") from exc
+
+    clips = [VideoFileClip(p) for p in real]
+    total = sum(c.duration for c in clips)
+    log(f"  [concat] joining {len(clips)} clips "
+        f"({', '.join(f'{c.duration:.0f}s' for c in clips)}) -> {total:.0f}s")
+    # method="compose" survives clips whose sizes differ slightly
+    final = concatenate_videoclips(clips, method="compose")
+    Path(out_path).parent.mkdir(parents=True, exist_ok=True)
+    kwargs = {"fps": 30, "codec": "libx264", "audio_codec": "aac", "logger": None}
+    try:
+        final.write_videofile(out_path, **kwargs)
+    except TypeError:
+        final.write_videofile(out_path, verbose=False, **kwargs)
+    for c in clips:
+        c.close()
+    final.close()
+    log(f"  [concat] ✅ {total:.0f}s reel -> {out_path}")
+    return out_path
+
+
+# ---------------------------------------------------------------------------
+# MUSIC MANAGER — ported from course_bot: category folders, round-robin order
+# ---------------------------------------------------------------------------
+
+MUSIC_CATEGORIES = {"news": "📰 News Music", "reels": "🎬 Reel Music",
+                    "course": "📚 Course Music"}
+MUSIC_DIRS = {k: MUSIC_DIR / k for k in MUSIC_CATEGORIES}
+for _d in MUSIC_DIRS.values():
+    _d.mkdir(parents=True, exist_ok=True)
+
+
+def list_songs(category: str = "news") -> list[str]:
+    d = MUSIC_DIRS.get(category, MUSIC_DIR)
+    if not d.exists():
+        return []
+    return sorted(f.name for f in d.iterdir() if f.suffix.lower() == ".mp3")
+
+
+def ensure_music_prefixes(category: str = "news") -> None:
+    """Re-number songs 000_, 001_, … preserving order, so sequencing is stable."""
+    d = MUSIC_DIRS.get(category, MUSIC_DIR)
+    for idx, song in enumerate(list_songs(category)):
+        base = re.sub(r"^\d{3}_", "", song)
+        new = f"{idx:03d}_{base}"
+        if song != new:
+            with contextlib.suppress(OSError):
+                (d / song).rename(d / new)
+
+
+def get_next_song(category: str = "news") -> str | None:
+    """Next song in the folder, round-robin, remembered across restarts.
+    Beats random choice: the whole library gets used instead of the same
+    two tracks over and over."""
+    songs = list_songs(category)
+    if not songs:
+        # fall back to any loose mp3 in music/ (pre-category layout)
+        loose = sorted(f for f in MUSIC_DIR.glob("*.mp3"))
+        return str(loose[0]) if loose else None
+    key = f"last_song_used_{category}"
+    last = get_state(key, "")
+    nxt = (songs.index(last) + 1) % len(songs) if last in songs else 0
+    name = songs[nxt]
+    set_state(key, name)
+    return str(MUSIC_DIRS.get(category, MUSIC_DIR) / name)
+
+
 # ---------------------------------------------------------------------------
 # Approval flow (card lives in telegram_bot.py; we wait on the shared db)
 # ---------------------------------------------------------------------------
@@ -1329,6 +1515,11 @@ def request_approval(kind: str, caption: str, files: list[str],
     s = store()["settings"]
     grace = s.get("approval_timeout_seconds", 60) + 120
     deadline = time.time() + grace
+    # L2 FIX: the edit-hold used to push the deadline forward every 4 seconds,
+    # so tapping "Edit caption" and never replying blocked the pipeline FOREVER
+    # while holding BRIDGE_LOCK. Bounded now.
+    MAX_EDIT_EXTENSIONS = 5
+    extensions = 0
     while time.time() < deadline:
         with db() as c:
             row = c.execute("SELECT * FROM approvals WHERE id=?", (aid,)).fetchone()
@@ -1340,8 +1531,12 @@ def request_approval(kind: str, caption: str, files: list[str],
         # The card promises "posting is PAUSED" while the admin types a new
         # caption. Without this the orchestrator kept its own countdown and
         # auto-published the ORIGINAL caption mid-edit.
-        if row and row["decided_by"] == "editing":
-            deadline = max(deadline, time.time() + grace)
+        if row and row["decided_by"] == "editing" and extensions < MAX_EDIT_EXTENSIONS:
+            if time.time() > deadline - grace / 2:
+                extensions += 1
+                deadline = time.time() + grace
+                log(f"  [approval] {aid} on hold for an edit "
+                    f"({extensions}/{MAX_EDIT_EXTENSIONS})")
         time.sleep(4)
     fallback = bool(s.get("auto_publish_on_timeout", True))
     with db() as c:
@@ -1411,6 +1606,18 @@ def run_content_manager() -> None:
             tg_admin(f"⚠️ <b>Content Manager under-delivered</b>\n"
                      f"Only {len(tasks)} tasks for 7 days (expected ≥14).\n"
                      f"The week's calendar will be sparse.")
+    # L1 FIX: a new calendar REPLACES the old one. Previously every 48h run
+    # INSERTed a fresh 7-day plan while the previous plan's remaining days were
+    # still scheduled, so days 2-7 ended up double- then triple-booked and
+    # posting volume compounded. max_daily_tasks never caught it because the
+    # counter was local to one run.
+    with db() as c:
+        wiped = c.execute("DELETE FROM tasks WHERE status='scheduled' AND urgent=0 "
+                          "AND execution_dt > ?", (now_ist().isoformat(),)).rowcount
+    if wiped:
+        log(f"  [cm] cleared {wiped} future task(s) from the previous calendar "
+            f"(urgent items kept)")
+
     added = 0
     capped = 0
     cap = store()["settings"].get("max_daily_tasks", 8)
@@ -1437,6 +1644,7 @@ def run_content_manager() -> None:
         log(f"  [cm] {capped} task(s) dropped by the {cap}/day cap")
     set_state("last_plan_run", now_ist().isoformat())
     tg_admin(f"📅 <b>New 7-day calendar</b>: {added} tasks scheduled"
+             + (f", {wiped} old replaced" if wiped else "")
              + (f" ({capped} over daily cap)" if capped else "") + ".\n"
              f"{result.get('schedule_overview', '')}")
 
@@ -1489,13 +1697,21 @@ def run_reel_task(blueprint: str, content_type: str) -> None:
     veo_prompt = plan.get("combined_veo_prompt", "")
     log("🎬 Sending God Prompt to Flow...")
     
-    final_path = str(work / "final_reel.mp4")
-    vid = bridge_task("video", veo_prompt, final_path, n=1)
-    
+    # Flow returns TWO ~10s generations (scene 1 + scene 2 of the God Prompt).
+    # n=1 downloaded only the first, so half of every reel was thrown away.
+    clip_path = str(work / "scene.mp4")
+    want = int(store()["settings"].get("reel_clip_count", 2))
+    vid = bridge_task("video", veo_prompt, clip_path, n=want)
+
     saved_vids = vid.get("saved_to", [])
     if not isinstance(saved_vids, list):
         saved_vids = [saved_vids]
-    final = saved_vids[0] if saved_vids else final_path
+    saved_vids = [v for v in saved_vids if v]
+    if not saved_vids:
+        raise PublishError("Flow returned no video at all — check the automation Chrome.")
+    if len(saved_vids) < want:
+        log(f"  [reel] Flow returned {len(saved_vids)} clip(s), expected {want}")
+    final = concat_videos(saved_vids, str(work / "final_reel.mp4"))
     
     # The reel_maker schema is FLAT (story_planning / combined_veo_prompt /
     # instagram_caption). An older revision nested these under "audio_and_copy",
@@ -1511,6 +1727,7 @@ def run_reel_task(blueprint: str, content_type: str) -> None:
         return
     caption = edited.get("caption", caption)
     routing = store()["routing"].get("reel", {})
+    published: list[str] = []
     log(f"  [route] reel -> {[k for k, v in routing.items() if v]}")
     # Each destination is isolated: a Meta outage must not cost you the YouTube
     # upload or the Telegram drop.
@@ -1518,12 +1735,14 @@ def run_reel_task(blueprint: str, content_type: str) -> None:
         try:
             rid = publish_instagram_reel(final, caption)
             log_performance("instagram", "reel", blueprint, rid)
+            published.append("instagram")
         except Exception as exc:
             report_failure("REEL_MAKER", exc, step="instagram_reel", topic=blueprint)
     if routing.get("youtube_short"):
         try:
             yid = publish_youtube_short(final, blueprint[:90], caption)
             log_performance("youtube", "short", blueprint, yid)
+            published.append("youtube")
         except Exception as exc:
             report_failure("REEL_MAKER", exc, step="youtube_short", topic=blueprint)
     if routing.get("twitter"):
@@ -1557,7 +1776,10 @@ def run_reel_task(blueprint: str, content_type: str) -> None:
                 log(f"  [reel] voice note skipped: {exc}")
                 
         log_performance("telegram", "reel", blueprint, None)
-    log("🎬 reel pipeline complete ✅")
+        published.append("telegram")
+    if not published:
+        raise PublishError("Reel reached NO destination — every route failed.")
+    log(f"🎬 reel pipeline complete ✅ ({', '.join(published)})")
 
 
 def run_post_task(blueprint: str, content_type: str, slides: int = 0) -> None:
@@ -1606,7 +1828,10 @@ def run_post_task(blueprint: str, content_type: str, slides: int = 0) -> None:
     if not ok:
         return
     caption = edited.get("caption", caption)
-    is_news = bool(re.search(r"urgent news|breaking", blueprint, re.I))
+    published: list[str] = []
+    # L9 FIX: match only the marker the news scheduler actually writes, so a
+    # normal post about "breaking down RBI policy" is not pushed to Stories.
+    is_news = blueprint.strip().upper().startswith("URGENT NEWS POSTER")
     key = "news" if is_news else ("carousel" if count > 1 else "post")
     routing = store()["routing"].get(key, {})
     log(f"  [route] {key} → {[k for k, v in routing.items() if v]}")
@@ -1617,12 +1842,14 @@ def run_post_task(blueprint: str, content_type: str, slides: int = 0) -> None:
             clip = build_news_clip(images[0], str(work / "story_clip.mp4"), topic=blueprint)
             sid = publish_instagram_story(clip, is_video=True)
             log_performance("instagram", "story", blueprint, sid)
+            published.append("story")
         except Exception as exc:
             report_failure("POST_MAKER", exc, step="instagram_story", topic=blueprint)
             # a story failure must not stop the feed post
             try:
                 sid = publish_instagram_story(images[0], is_video=False)
                 log_performance("instagram", "story", blueprint, sid)
+                published.append("story(static)")
                 log("  [route] fell back to a static image story")
             except Exception as exc2:
                 log(f"  [route] static story fallback also failed: {exc2}")
@@ -1633,6 +1860,7 @@ def run_post_task(blueprint: str, content_type: str, slides: int = 0) -> None:
             rid = (publish_instagram_carousel(images, caption) if count > 1
                    else publish_instagram_image(images[0], caption))
             log_performance("instagram", key, blueprint, rid)
+            published.append("instagram")
         except Exception as exc:
             report_failure("POST_MAKER", exc, step="instagram_post", topic=blueprint)
 
@@ -1642,6 +1870,7 @@ def run_post_task(blueprint: str, content_type: str, slides: int = 0) -> None:
             tid = publish_twitter(caption, images)
             if tid:
                 log_performance("twitter", key, blueprint, tid)
+                published.append("twitter")
         except Exception as exc:
             report_failure("POST_MAKER", exc, step="twitter", topic=blueprint)
 
@@ -1650,9 +1879,15 @@ def run_post_task(blueprint: str, content_type: str, slides: int = 0) -> None:
         try:
             tg_channel_file(images[0], caption, "photo")
             log_performance("telegram", key, blueprint, None)
+            published.append("telegram")
         except Exception as exc:
             report_failure("POST_MAKER", exc, step="telegram", topic=blueprint)
-    log("🖼 post pipeline complete ✅")
+    # L3 FIX: isolating each destination meant a post that reached NOWHERE still
+    # recorded status='done'. Raise so the task lands in 'failed' instead.
+    if not published:
+        raise PublishError("Post reached NO destination — every route failed. "
+                           "See the failure cards above for each one.")
+    log(f"🖼 post pipeline complete ✅ ({', '.join(published)})")
 
 
 def run_pdf_task(blueprint: str) -> None:
@@ -1681,8 +1916,20 @@ def run_pdf_task(blueprint: str) -> None:
     if not ok:
         return
     msg = edited.get("caption", msg)
+    published: list[str] = []
     if store()["routing"]["pdf"].get("telegram"):
-        tg_channel_file(pdf_path, msg, "document")
+        try:
+            # PDFs are the lead magnet, so the drop is PINNED in the channel.
+            res = tg_channel_file(pdf_path, msg, "document")
+            mid = ((res or {}).get("result") or {}).get("message_id")
+            if mid:
+                _tg("pinMessage", {"chat_id": TG_CHANNEL, "message_id": mid,
+                                   "disable_notification": False})
+                log("  [pdf] 📌 pinned in the channel")
+            log_performance("telegram", "pdf", blueprint, None)
+            published.append("telegram")
+        except Exception as exc:
+            report_failure("PDF_MAKER", exc, step="telegram", topic=blueprint)
         vn = tele.get("voice_note", {})
         if vn.get("is_required") and vn.get("hinglish_script", "NONE") != "NONE":
             try:
@@ -1691,10 +1938,12 @@ def run_pdf_task(blueprint: str) -> None:
                 sv = tts.get("saved_to")
                 tg_channel_file(sv[0] if isinstance(sv, list) else sv,
                                 "🎙 Founder note", "voice")
+                published.append("voice note")
             except Exception as exc:
                 log(f"  [pdf] voice note skipped: {exc}")
-        log_performance("telegram", "pdf", blueprint, None)
-    log("📄 pdf pipeline complete ✅")
+    if not published:
+        raise PublishError("PDF reached NO destination — the Telegram drop failed.")
+    log(f"📄 pdf pipeline complete ✅ ({', '.join(published)})")
 
 
 def run_poll_task(blueprint: str) -> None:
@@ -1711,11 +1960,10 @@ def run_poll_task(blueprint: str) -> None:
         tg_channel_poll(poll["question"], poll.get("options", []))
         expl = poll.get("explanation_text")
         if expl:
-            # daemon=True: a plain Timer is non-daemon and keeps the process
-            # alive for a full hour after shutdown is requested.
-            t = threading.Timer(3600, tg_channel_text, args=(f"🧠 *Poll answer:*\n{expl}",))
-            t.daemon = True
-            t.start()
+            # L7 FIX: threading.Timer lived in memory, so a restart within the
+            # hour lost the answer entirely. It's a real scheduled task now.
+            schedule_task(now_ist() + timedelta(hours=1), "POLL_ANSWER", "TEXT",
+                          f"🧠 Poll answer:\n{expl}")
     log_performance("telegram", "poll", blueprint, None)
     log("📊 poll complete ✅")
 
@@ -1739,13 +1987,16 @@ def run_news_check() -> None:
     heads = news.get("headlines", [])
     set_state("latest_news", json.dumps(heads, ensure_ascii=False))
     set_state("latest_trends", json.dumps(news.get("social_trends", []), ensure_ascii=False))
+    # L10 FIX: only major[0] was used, so a day with three MAJOR stories silently
+    # dropped two. All of them are scheduled now, staggered so they don't collide.
     major = [h for h in heads if h.get("magnitude") == "MAJOR"]
-    if major:
-        h = major[0]
+    for i, h in enumerate(major[:3]):
         log(f"🚨 MAJOR news: {h['headline']}")
-        schedule_task(now_ist() + timedelta(minutes=1), "POST_MAKER", "SINGLE_POST",
+        schedule_task(now_ist() + timedelta(minutes=1 + i * 25), "POST_MAKER", "SINGLE_POST",
                       f"URGENT NEWS POSTER: {h['headline']} — {h['why_it_matters']}",
                       urgent=True)
+    if len(major) > 3:
+        log(f"  [news] {len(major) - 3} extra MAJOR headline(s) not scheduled this run")
 
 
 def run_growth_scan() -> None:
@@ -2391,6 +2642,8 @@ def execute_task(row: sqlite3.Row) -> None:
             run_pdf_task(blueprint)
         elif agent == "TELEGRAM_POLL":
             run_poll_task(blueprint)
+        elif agent == "POLL_ANSWER":
+            tg_channel_text(blueprint)
         else:
             raise ValueError(f"unknown agent {agent}")
         with db() as c:
@@ -2424,7 +2677,6 @@ def botcmd_worker() -> None:
 def scheduler_loop() -> None:
     log("🚀 Stock Warrior orchestrator ONLINE (IST scheduler, 30s tick)")
     tg_admin("🚀 <b>Stock Warrior engine started</b>")
-    fired_news_slots: set[str] = set()
     while True:
         try:
             s = store()["settings"]
@@ -2460,23 +2712,28 @@ def scheduler_loop() -> None:
                               (now - ceo_gap + timedelta(hours=2)).isoformat())
                     log(f"⚠️ CEO run failed — retrying in ~2h: {exc}")
 
-            # 4) news slots (fire once per slot per day)
-            slot_key_prefix = now.strftime("%Y-%m-%d ")
+            # 4) news slots
+            # L5 FIX: the fired-set was in memory only, so restarting inside the
+            # window fired the same slot twice. It lives in `state` now.
+            # L4 FIX: the window was 10 minutes checked once per tick — three due
+            # reels blocked the tick for ~30 min and the slot was missed for the
+            # whole day. Any slot whose time has passed today and has not fired
+            # is now caught, however late the tick is.
+            today = now.strftime("%Y-%m-%d")
+            fired_today = set(json.loads(get_state(f"news_fired_{today}", "[]")))
             for slot in s.get("news_schedule", []):
-                key = slot_key_prefix + slot
-                if key in fired_news_slots:
+                if slot in fired_today:
                     continue
                 try:
                     sh, sm = map(int, slot.split(":"))
                 except ValueError:
                     continue
                 slot_dt = now.replace(hour=sh, minute=sm, second=0, microsecond=0)
-                if timedelta(0) <= now - slot_dt < timedelta(minutes=10):
-                    fired_news_slots.add(key)
+                if now >= slot_dt:
+                    fired_today.add(slot)
+                    set_state(f"news_fired_{today}", json.dumps(sorted(fired_today)))
                     run_news_check()
-            if len(fired_news_slots) > 50:
-                fired_news_slots = {k for k in fired_news_slots
-                                    if k.startswith(slot_key_prefix)}
+                    break          # one slot per tick — don't stack news runs
 
             # 5) growth scans
             last_g = get_state("last_growth_run")

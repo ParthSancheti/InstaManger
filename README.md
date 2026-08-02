@@ -167,7 +167,46 @@ different hosting paths.
 `PEXELS_API_KEY` supplies stock footage for the story background. It is a
 *source* of b-roll, not a host — it cannot serve your own renders to Meta.
 
-### Direct upload — the actual fix for video
+### Why Reels and Stories used to fail with "processing ERROR"
+
+Meta downloads the file, then rejects it. Its published spec for Reels **and**
+Stories is strict:
+
+| Requirement | Value |
+|---|---|
+| Container | MP4/MOV, no edit lists, **moov atom at the FRONT** |
+| Video codec | H.264 (or HEVC), progressive, closed GOP, **4:2:0 chroma** |
+| Frame rate | 23–60 fps |
+| Audio codec | **AAC**, ≤48 kHz, 1–2 channels |
+| Duration | Reels 3s min (5–90s for Reels-tab eligibility) |
+| Aspect | 9:16 recommended |
+| Account | Instagram **Business** — Creator is NOT supported |
+| Permissions | `instagram_basic` + `instagram_content_publish` |
+
+Google Flow writes the **moov atom at the end** of the file and often ships no
+audio track at all, so Meta downloads it, fails to parse it, and returns
+`status_code=ERROR` with no useful message. Images were unaffected, which is why
+feed posts worked in the same run.
+
+Every video is now re-encoded through `normalize_for_meta()` before publishing:
+H.264 / yuv420p / closed GOP / AAC 48 kHz stereo / `+faststart`, padded to
+1080×1920, with a silent audio track added when one is missing. Requires ffmpeg
+(or `pip install imageio-ffmpeg`).
+
+### Reels are two clips, joined
+
+Flow returns **two ~10-second generations** — scene 1 and scene 2 of the God
+Prompt. The engine used to download only the first, so half of every reel was
+thrown away. It now pulls both (`settings.reel_clip_count`) and joins them with
+moviepy into one 20s video before normalising.
+
+### Music manager
+
+`music/news/`, `music/reels/`, `music/course/`. Tracks are used **round-robin**
+and the position survives restarts, so the whole library gets played instead of
+the same track repeating. Send an `.mp3` to the panel's 🎵 Music screen.
+
+### Direct upload — a second route for video
 
 ImgBB hosts **images only**. There is no equally reliable free host for video,
 which is exactly why a photo post can succeed in the same run where a Reel and a

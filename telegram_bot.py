@@ -48,6 +48,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import (CallbackQuery, FSInputFile, InlineKeyboardButton,
                            InlineKeyboardMarkup, Message)
+from aiogram.exceptions import TelegramBadRequest
 
 BASE_DIR = Path(__file__).resolve().parent
 STORE_PATH = BASE_DIR / "prompts_store.json"
@@ -428,22 +429,30 @@ async def cb_rt_toggle(q: CallbackQuery):
 
 @r.callback_query(F.data == "music")
 async def cb_music(q: CallbackQuery):
-    files = sorted(f.name for f in MUSIC_DIR.glob("*.mp3"))
+    news_dir = MUSIC_DIR / "news"
+    news_dir.mkdir(parents=True, exist_ok=True)
+    files = sorted(f.name for f in news_dir.glob("*.mp3"))
     lib = store().get("music_library", [])
     listing = "\n".join(f"{'🎵' if f in lib else '▫️'} {f}" for f in files) or "(empty)"
-    await q.message.edit_text(
-        "🎵 <b>Music</b> — reel background tracks.\n"
-        "Send me an .mp3 file to add one. 🎵 = active in library.\n\n" + listing,
-        parse_mode="HTML",
-        reply_markup=kb([[("♻️ Sync library = all files", "music_sync")],
-                         [("⬅️ Back", "home")]]))
+    try:
+        await q.message.edit_text(
+            "🎵 <b>Music</b> — reel background tracks.\n"
+            "Send me an .mp3 file to add one. 🎵 = active in library.\n\n" + listing,
+            parse_mode="HTML",
+            reply_markup=kb([[("♻️ Sync library = all files", "music_sync")],
+                             [("⬅️ Back", "home")]]))
+    except TelegramBadRequest as e:
+        if "message is not modified" not in str(e).lower():
+            raise
     await q.answer()
 
 
 @r.callback_query(F.data == "music_sync")
 async def cb_music_sync(q: CallbackQuery):
     d = store()
-    d["music_library"] = sorted(f.name for f in MUSIC_DIR.glob("*.mp3"))
+    news_dir = MUSIC_DIR / "news"
+    news_dir.mkdir(parents=True, exist_ok=True)
+    d["music_library"] = sorted(f.name for f in news_dir.glob("*.mp3"))
     save_store(d)
     await q.answer(f"Library = {len(d['music_library'])} tracks", show_alert=True)
     await cb_music(q)
@@ -457,7 +466,9 @@ async def on_audio(m: Message):
     name = (obj.file_name or f"track_{obj.file_unique_id}.mp3")
     if not name.lower().endswith(".mp3"):
         return await m.answer("Only .mp3 please.")
-    dest = MUSIC_DIR / name
+    news_dir = MUSIC_DIR / "news"
+    news_dir.mkdir(parents=True, exist_ok=True)
+    dest = news_dir / name
     await bot.download(obj, destination=dest)
     d = store()
     if name not in d["music_library"]:

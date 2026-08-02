@@ -57,3 +57,11 @@ requests-oauthlib
 #  Optional: without it, video publishing depends on hosting.
 # =============================================================
 instagrapi
+
+# =============================================================
+#  imageio-ffmpeg — bundles an ffmpeg binary. REQUIRED unless you
+#  have ffmpeg on PATH. Every video is re-encoded to Instagram's
+#  exact spec (H.264 / yuv420p / AAC 48kHz / faststart) before
+#  publishing — without it Meta reports "processing ERROR".
+# =============================================================
+imageio-ffmpeg

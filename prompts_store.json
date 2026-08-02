@@ -36,7 +36,8 @@
     "news_clip_music": true,
     "dry_run": false,
     "news_clip_stock_bg": true,
-    "instagrapi_fallback": true
+    "instagrapi_fallback": true,
+    "reel_clip_count": 2
   },
   "routing": {
     "reel": {
