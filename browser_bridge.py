@@ -385,6 +385,14 @@ def focus_automation_chrome(settle_s: float = 0.6) -> bool:
             length = user32.GetWindowTextLengthW(hwnd)
             if length <= 0:
                 return True
+            
+            # Chrome spawns multiple "visible" windows that are actually 0x0 hidden helper windows.
+            # We must ignore them so we target the real browser window.
+            rect = wintypes.RECT()
+            user32.GetWindowRect(hwnd, ctypes.byref(rect))
+            if (rect.right - rect.left) < 100 or (rect.bottom - rect.top) < 100:
+                return True
+
             buf = ctypes.create_unicode_buffer(length + 1)
             user32.GetWindowTextW(hwnd, buf, length + 1)
             title = buf.value
@@ -570,6 +578,22 @@ def submit_result():
     return jsonify(ok=True)
 
 
+@app.post("/close-gracefully")
+def close_gracefully():
+    """Tells the extension to close all tabs one by one, gracefully exiting Chrome."""
+    global _last_poll
+    task_id = os.urandom(5).hex()
+    _tasks.put({
+        "id": task_id,
+        "type": "close_browser",
+        "prompt": ""
+    })
+    # Reset liveness immediately so the next normal task natively re-launches Chrome
+    _last_poll = 0
+    return jsonify(ok=True)
+
+
+
 @app.post("/restart-chrome")
 def restart_chrome_http():
     """Kill the automation Chrome and relaunch it (used by the Telegram panel)."""
@@ -693,6 +717,7 @@ def force_paste_submit():
             print("[bridge] WARNING: could not verify Chrome focus — pasting anyway")
 
         import pyautogui
+        pyautogui.FAILSAFE = False
         # Tap ESC to close any window menus that the ALT focus hack might have opened
         pyautogui.press('esc')
         time.sleep(0.1)
@@ -856,6 +881,7 @@ def _send_ctrl_v() -> None:
     """Ctrl+V into the currently focused window (the automation Chrome)."""
     try:
         import pyautogui
+        pyautogui.FAILSAFE = False
         pyautogui.hotkey("ctrl", "v")
     except ImportError as exc:
         raise RuntimeError("pyautogui not installed — pip install pyautogui") from exc

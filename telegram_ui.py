@@ -32,6 +32,7 @@ from aiogram import F, Router
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
+from aiogram.exceptions import TelegramBadRequest
 
 router = Router()
 
@@ -72,6 +73,10 @@ SETTING_SPECS = {
     "healer_auto_apply": {
         "label": "Auto-apply healer fixes",
         "help": "If ON, selector fixes apply automatically. Recommend OFF — review them first.",
+        "kind": "toggle"},
+    "telegram_post_as_link": {
+        "label": "Post to Telegram as Link",
+        "help": "If ON, automated Telegram posts share the IG/YT link instead of uploading the raw video/image.",
         "kind": "toggle"},
     "twitter_enabled": {
         "label": "Twitter/X posting",
@@ -258,7 +263,7 @@ async def save_text_list(m: Message, state: FSMContext):
 #  SCHEDULE VIEWER — upcoming + recent tasks, grouped by day
 # ===========================================================================
 _AGENT_ICON = {"REEL_MAKER": "🎬", "POST_MAKER": "🖼", "PDF_MAKER": "📄",
-               "TELEGRAM_POLL": "📊"}
+               "TELEGRAM_ENGAGEMENT": "💬"}
 
 
 @router.callback_query(F.data == "ui_schedule")
@@ -297,10 +302,13 @@ async def schedule_view(q: CallbackQuery):
         chunks.append(f"\n\n<i>running {running} · done {done} · failed {failed}</i>")
         body = "\n".join(chunks)
 
-    await q.message.edit_text(
-        body, parse_mode="HTML",
-        reply_markup=kb([[("🔄 Refresh", "ui_schedule")],
-                         [("⚠️ Failed tasks", "ui_failed"), ("⬅️ Back", "home")]]))
+    try:
+        await q.message.edit_text(
+            body, parse_mode="HTML",
+            reply_markup=kb([[("🔄 Refresh", "ui_schedule")],
+                             [("⚠️ Failed tasks", "ui_failed"), ("⬅️ Back", "home")]]))
+    except TelegramBadRequest:
+        pass
     await q.answer()
 
 
@@ -319,10 +327,28 @@ async def failed_view(q: CallbackQuery):
             icon = _AGENT_ICON.get(t["agent"], "•")
             lines.append(f"{icon} {(t['blueprint'] or '')[:40]}\n   <code>{(t['error'] or '')[:80]}</code>")
         body = "\n".join(lines)
-    await q.message.edit_text(body, parse_mode="HTML",
-                              reply_markup=kb([[("⬅️ Back", "ui_schedule")]]))
+    buttons = []
+    if rows:
+        buttons.append([("🔄 Retry All Failed", "ui_retry_failed")])
+    buttons.append([("⬅️ Back", "ui_schedule")])
+    try:
+        await q.message.edit_text(body, parse_mode="HTML",
+                                  reply_markup=kb(buttons))
+    except TelegramBadRequest:
+        pass
     await q.answer()
 
+@router.callback_query(F.data == "ui_retry_failed")
+async def retry_failed(q: CallbackQuery):
+    if not _guard(q):
+        return await q.answer()
+    with closing(_db()) as c, c:
+        # The engine looks for "scheduled" tasks, not "PENDING"
+        c.execute("UPDATE tasks SET status='scheduled' WHERE status='failed'")
+        c.commit()
+    await q.answer("All failed tasks queued for retry!")
+    # Send them back to the failed view which should now say "No failed tasks"
+    await failed_view(q)
 
 # ===========================================================================
 #  TOKENS & KEYS — writes to .env (upsert, never clobbers existing keys)

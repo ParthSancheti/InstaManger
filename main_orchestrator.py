@@ -299,8 +299,9 @@ def ask_gemini(prompt: str, *, schema_key: str | None = None,
         except (json.JSONDecodeError, ValueError) as exc:
             last_exc = exc
             log(f"  [gemini] bad JSON (attempt {attempt + 1}): {exc}")
-            prompt = (prompt + "\n\nREMINDER: your previous answer was not valid "
-                      "parseable JSON matching the schema. Output ONLY the JSON object.")
+            prompt = (prompt + f"\n\nREMINDER: your previous answer was not valid parseable JSON. "
+                      f"The parser failed with: {exc}\n"
+                      f"CRITICAL: If you are putting quotes inside a string value (like dialogue), you MUST escape them (\\\") or use single quotes instead. Output ONLY the valid JSON object.")
     raise BridgeError(f"Gemini failed after retries: {last_exc}")
 
 
@@ -602,7 +603,11 @@ def _host_file(path: str) -> str:
             r = requests.post("https://tmpfiles.org/api/v1/upload",
                               files={"file": f}, timeout=300)
         r.raise_for_status()
-        return r.json()["data"]["url"].replace("tmpfiles.org/", "tmpfiles.org/dl/")
+        url = r.json()["data"]["url"].replace("tmpfiles.org/", "tmpfiles.org/dl/")
+        r2 = requests.get(url, timeout=30)
+        import re
+        m = re.search(r'href="(https://tmpfiles\.org/dl/[^"]+)"', r2.text)
+        return m.group(1) if m else url
 
     def _catbox():
         with open(path, "rb") as f:
@@ -827,6 +832,18 @@ def _publish_reel_graph(path: str, caption: str) -> str | None:
     return r2.json().get("id")
 
 
+def get_instagram_permalink(media_id: str) -> str | None:
+    if not (META_TOKEN and media_id):
+        return None
+    try:
+        r = requests.get(f"{GRAPH}/{media_id}", params={"fields": "permalink", "access_token": META_TOKEN}, timeout=60)
+        if r.status_code == 200:
+            return r.json().get("permalink")
+    except Exception as exc:
+        log(f"  [meta] failed to fetch permalink for {media_id}: {exc}")
+    return None
+
+
 def publish_youtube_short(path: str, title: str, description: str) -> str | None:
     """Needs yt_token.json (OAuth user creds) + google-api-python-client."""
     token = BASE_DIR / "yt_token.json"
@@ -899,11 +916,21 @@ def _publish_story_graph(path: str, is_video: bool) -> str | None:
     url = _host_file(path)
     data = {"media_type": "STORIES", "access_token": META_TOKEN}
     data["video_url" if is_video else "image_url"] = url
-    r1 = requests.post(f"{GRAPH}/{META_IG_ID}/media", data=data, timeout=180)
-    if r1.status_code != 200:
+    
+    cid = None
+    for attempt in range(3):
+        r1 = requests.post(f"{GRAPH}/{META_IG_ID}/media", data=data, timeout=180)
+        if r1.status_code == 200:
+            cid = r1.json()["id"]
+            break
+        if r1.status_code >= 500:
+            log(f"  [meta] 5xx on story create (attempt {attempt + 1}) — retrying")
+            time.sleep(5)
+            continue
         raise PublishError(f"IG story create failed: {_graph_error(r1)} "
                            f"(media_url was {url})")
-    cid = r1.json()["id"]
+    if not cid:
+        raise PublishError("IG story create failed after 3 attempts (Meta kept returning 5xx)")
     if is_video:                                    # video stories need processing
         for _ in range(18):
             time.sleep(10)
@@ -1411,19 +1438,68 @@ def normalize_for_meta(path: str, out_path: str | None = None) -> str:
     return str(out)
 
 
-def concat_videos(paths: list[str], out_path: str) -> str:
-    """Join Flow's clips into one reel.
+def _is_part2(video_path: str) -> bool:
+    import speech_recognition as sr
+    import os
+    try:
+        from moviepy.editor import VideoFileClip
+    except ModuleNotFoundError:
+        from moviepy import VideoFileClip
+    
+    audio_path = video_path.replace(".mp4", "_temp_audio.wav")
+    has_comment = False
+    video = None
+    try:
+        video = VideoFileClip(video_path)
+        if not video.audio:
+            return False
+        video.audio.write_audiofile(audio_path, codec='pcm_s16le', fps=16000, logger=None)
+        
+        r = sr.Recognizer()
+        with sr.AudioFile(audio_path) as source:
+            audio_data = r.record(source)
+            try:
+                text_en = r.recognize_google(audio_data, language="en-IN").lower()
+                if "comment" in text_en:
+                    has_comment = True
+            except sr.UnknownValueError:
+                pass
+                
+            if not has_comment:
+                try:
+                    text_hi = r.recognize_google(audio_data, language="hi-IN")
+                    if "कमेंट" in text_hi or "comment" in text_hi.lower():
+                        has_comment = True
+                except sr.UnknownValueError:
+                    pass
+    except Exception as e:
+        log(f"  [mux_reel] Speech recognition check failed for {video_path}: {e}")
+    finally:
+        if video:
+            video.close()
+        if os.path.exists(audio_path):
+            try:
+                os.remove(audio_path)
+            except Exception:
+                pass
+                
+    return has_comment
 
-    Flow returns TWO ~10s generations — scene 1 and scene 2 of the God Prompt.
-    Only the first was ever downloaded and published, so half of every reel was
-    silently thrown away. They are joined in order here.
+
+def mux_reel(scene_videos: list[str], voiceovers: list[str], out_path: str) -> str:
+    """Join Flow's clips into one reel.
+    Audio is natively baked into Veo video clips, so we ignore voiceovers.
     """
-    real = [p for p in paths if p and Path(p).exists() and Path(p).stat().st_size > 1000]
+    real = [p for p in scene_videos if p and Path(p).exists() and Path(p).stat().st_size > 1000]
     if not real:
         raise RuntimeError("No usable video clips to join.")
     if len(real) == 1:
-        log("  [concat] only one clip came back — using it as-is")
+        log("  [mux_reel] only one clip came back — using it as-is")
         return real[0]
+        
+    if len(real) == 2:
+        log("  [mux_reel] Analyzing audio transcripts to sort Part 1 and Part 2 dynamically...")
+        real.sort(key=lambda p: _is_part2(p))
     try:
         try:
             from moviepy.editor import VideoFileClip, concatenate_videoclips
@@ -1434,7 +1510,7 @@ def concat_videos(paths: list[str], out_path: str) -> str:
 
     clips = [VideoFileClip(p) for p in real]
     total = sum(c.duration for c in clips)
-    log(f"  [concat] joining {len(clips)} clips "
+    log(f"  [mux_reel] joining {len(clips)} clips "
         f"({', '.join(f'{c.duration:.0f}s' for c in clips)}) -> {total:.0f}s")
     # method="compose" survives clips whose sizes differ slightly
     final = concatenate_videoclips(clips, method="compose")
@@ -1447,7 +1523,7 @@ def concat_videos(paths: list[str], out_path: str) -> str:
     for c in clips:
         c.close()
     final.close()
-    log(f"  [concat] ✅ {total:.0f}s reel -> {out_path}")
+    log(f"  [mux_reel] ✅ {total:.0f}s reel -> {out_path}")
     return out_path
 
 
@@ -1590,9 +1666,16 @@ def run_content_manager() -> None:
     """Content Manager → 7-day master calendar → tasks table."""
     log("📅 CONTENT MANAGER building the 7-day calendar")
     directives = get_state("ceo_directives", "{}")
+    
+    with db() as c:
+        rows = c.execute("SELECT blueprint FROM tasks WHERE status IN ('done', 'scheduled') ORDER BY execution_dt DESC LIMIT 50").fetchall()
+        past_topics = [dict(row)["blueprint"] for row in rows if dict(row).get("blueprint")]
+    past_topics_str = "\n".join(f"- {pt}" for pt in past_topics) if past_topics else "None yet."
+
     prompt = render_prompt("content_manager",
                            current_datetime=now_ist().strftime("%Y-%m-%d %H:%M"),
-                           brand_ceo_json=directives)
+                           brand_ceo_json=directives,
+                           past_topics=past_topics_str)
     result = ask_gemini(prompt, schema_key="content_manager")
     tasks = result.get("scheduled_tasks", [])
     if len(tasks) < 14:
@@ -1676,6 +1759,8 @@ def run_reel_task(blueprint: str, content_type: str) -> None:
     log(f"  [reel] content_type {content_type!r} -> {ct}")
     cta_keyword = "GUIDE" if any(
         w in blueprint.lower() for w in ["pdf", "guide", "playbook", "course"]) else "WARRIOR"
+    cta_context = ("Tell them to comment GUIDE to get the free PDF" if cta_keyword == "GUIDE" 
+                   else "Tell them to comment WARRIOR to join the Telegram community")
 
     # Use the CEO's live strategic pillars instead of a hardcoded string, so the
     # 48h strategy review actually reaches the reel writer.
@@ -1688,7 +1773,9 @@ def run_reel_task(blueprint: str, content_type: str) -> None:
     plan = ask_gemini(render_prompt("reel_maker",
                                     content_type=ct,
                                     topic_blueprint=blueprint,
-                                    pillar=pillar),
+                                    pillar=pillar,
+                                    cta_keyword=cta_keyword,
+                                    cta_context=cta_context),
                       schema_key="reel_maker")
     stamp = now_ist().strftime("%Y%m%d_%H%M")
     work = OUT_DIR / f"reel_{stamp}"
@@ -1696,12 +1783,18 @@ def run_reel_task(blueprint: str, content_type: str) -> None:
     
     veo_prompt = plan.get("combined_veo_prompt", "")
     log("🎬 Sending God Prompt to Flow...")
-    
-    # Flow returns TWO ~10s generations (scene 1 + scene 2 of the God Prompt).
-    # n=1 downloaded only the first, so half of every reel was thrown away.
+    try:
+        # RDP FOCUS FIX: Kill Chrome and let bridge_task natively spawn it.
+        # A native OS launch forces the window to the absolute foreground layer,
+        # bypassing the PyAutoGUI OS lock on disconnected RDP sessions.
+        requests.post(f"{BRIDGE}/restart-chrome", timeout=5)
+        time.sleep(1) # Brief pause to let Chrome die completely
+    except Exception:
+        pass
+        
+    # Flow returns TWO ~10s generations.
     clip_path = str(work / "scene.mp4")
-    want = int(store()["settings"].get("reel_clip_count", 2))
-    vid = bridge_task("video", veo_prompt, clip_path, n=want)
+    vid = bridge_task("video", veo_prompt, clip_path, n=2)
 
     saved_vids = vid.get("saved_to", [])
     if not isinstance(saved_vids, list):
@@ -1709,9 +1802,10 @@ def run_reel_task(blueprint: str, content_type: str) -> None:
     saved_vids = [v for v in saved_vids if v]
     if not saved_vids:
         raise PublishError("Flow returned no video at all — check the automation Chrome.")
-    if len(saved_vids) < want:
-        log(f"  [reel] Flow returned {len(saved_vids)} clip(s), expected {want}")
-    final = concat_videos(saved_vids, str(work / "final_reel.mp4"))
+    if len(saved_vids) < 2:
+        log(f"  [reel] Flow returned {len(saved_vids)} clip(s), expected 2")
+    # mux_reel now dynamically sorts the videos by listening for the word "comment"
+    final = mux_reel(saved_vids, [], str(work / "final_reel.mp4"))
     
     # The reel_maker schema is FLAT (story_planning / combined_veo_prompt /
     # instagram_caption). An older revision nested these under "audio_and_copy",
@@ -1728,6 +1822,7 @@ def run_reel_task(blueprint: str, content_type: str) -> None:
     caption = edited.get("caption", caption)
     routing = store()["routing"].get("reel", {})
     published: list[str] = []
+    rid, yid = None, None
     log(f"  [route] reel -> {[k for k, v in routing.items() if v]}")
     # Each destination is isolated: a Meta outage must not cost you the YouTube
     # upload or the Telegram drop.
@@ -1758,11 +1853,24 @@ def run_reel_task(blueprint: str, content_type: str) -> None:
                                             topic_blueprint=blueprint,
                                             current_time=now_ist().strftime("%H:%M")),
                               schema_key="tele_manager")
-            context_copy = tele["telegram_message"]["text_body"].replace("[LINK HERE]", "")
+            context_copy = tele["telegram_message"]["text_body"]
         except Exception as exc:
             log(f"  [reel] Telemanager copy failed ({exc}) — using the IG caption")
             tele, context_copy = {}, caption
-        tg_channel_file(final, context_copy, "video")
+        
+        link = None
+        if store()["settings"].get("telegram_post_as_link", False):
+            if rid and (pl := get_instagram_permalink(rid)):
+                link = pl
+            elif yid:
+                link = f"https://youtube.com/shorts/{yid}"
+        
+        if link:
+            context_copy = context_copy.replace("[LINK HERE]", link)
+            tg_channel_text(context_copy)
+        else:
+            context_copy = context_copy.replace("[LINK HERE]", "")
+            tg_channel_file(final, context_copy, "video")
 
         vn = tele.get("voice_note", {})
         if vn.get("is_required") and vn.get("hinglish_script", "NONE") != "NONE":
@@ -1809,7 +1917,9 @@ def run_post_task(blueprint: str, content_type: str, slides: int = 0) -> None:
         
     # Pad or truncate prompts to match count
     while len(prompts) < count:
-        prompts.append(prompts[-1] if prompts else "finance trading background")
+        idx = len(prompts) + 1
+        base = prompts[0] if prompts else "finance trading background"
+        prompts.append(f"{base} (Slide {idx} variation with distinct visual angle)")
     prompts = prompts[:count]
 
     chatgpt_chat_code = None
@@ -1829,6 +1939,7 @@ def run_post_task(blueprint: str, content_type: str, slides: int = 0) -> None:
         return
     caption = edited.get("caption", caption)
     published: list[str] = []
+    rid = None
     # L9 FIX: match only the marker the news scheduler actually writes, so a
     # normal post about "breaking down RBI policy" is not pushed to Stories.
     is_news = blueprint.strip().upper().startswith("URGENT NEWS POSTER")
@@ -1877,7 +1988,15 @@ def run_post_task(blueprint: str, content_type: str, slides: int = 0) -> None:
     # --- Telegram ------------------------------------------------------------
     if routing.get("telegram"):
         try:
-            tg_channel_file(images[0], caption, "photo")
+            link = None
+            if store()["settings"].get("telegram_post_as_link", False):
+                if rid and (pl := get_instagram_permalink(rid)):
+                    link = pl
+
+            if link:
+                tg_channel_text(f"{caption}\n\n🔗 {link}")
+            else:
+                tg_channel_file(images[0], caption, "photo")
             log_performance("telegram", key, blueprint, None)
             published.append("telegram")
         except Exception as exc:
@@ -1946,15 +2065,18 @@ def run_pdf_task(blueprint: str) -> None:
     log(f"📄 pdf pipeline complete ✅ ({', '.join(published)})")
 
 
-def run_poll_task(blueprint: str) -> None:
-    """TELEGRAM_POLL: Telemanager → channel poll + psychology message."""
-    log(f"📊 TELEGRAM_POLL: {blueprint[:80]}")
-    tele = ask_gemini(render_prompt("tele_manager", trigger_type="RANDOM_ENGAGEMENT",
+def run_telegram_engagement_task(blueprint: str) -> None:
+    """TELEGRAM_ENGAGEMENT: Telemanager → channel poll, message, or voice note."""
+    log(f"📊 TELEGRAM_ENGAGEMENT: {blueprint[:80]}")
+    tele = ask_gemini(render_prompt("tele_manager", trigger_type="TELEGRAM_ENGAGEMENT",
                                     topic_blueprint=blueprint,
                                     current_time=now_ist().strftime("%H:%M")),
                       schema_key="tele_manager")
-    tmsg = tele["telegram_message"]
-    tg_channel_text(tmsg["text_body"], pin=bool(tmsg.get("pin_message")))
+    
+    tmsg = tele.get("telegram_message", {})
+    if tmsg.get("text_body") and tmsg["text_body"] != "NONE":
+        tg_channel_text(tmsg["text_body"], pin=bool(tmsg.get("pin_message")))
+    
     poll = tele.get("interactive_poll", {})
     if poll.get("is_required"):
         tg_channel_poll(poll["question"], poll.get("options", []))
@@ -1964,8 +2086,23 @@ def run_poll_task(blueprint: str) -> None:
             # hour lost the answer entirely. It's a real scheduled task now.
             schedule_task(now_ist() + timedelta(hours=1), "POLL_ANSWER", "TEXT",
                           f"🧠 Poll answer:\n{expl}")
-    log_performance("telegram", "poll", blueprint, None)
-    log("📊 poll complete ✅")
+                          
+    vn = tele.get("voice_note", {})
+    if vn.get("is_required") and vn.get("hinglish_script", "NONE") != "NONE":
+        try:
+            stamp = now_ist().strftime("%Y%m%d_%H%M%S")
+            work = OUT_DIR / f"telegram_vn_{stamp}"
+            work.mkdir(exist_ok=True)
+            tts = bridge_task("tts", vn["hinglish_script"],
+                              str(work / "vn.mp3"))
+            sv = tts.get("saved_to")
+            tg_channel_file(sv[0] if isinstance(sv, list) else sv,
+                            "🎤 Founder note", "voice")
+        except Exception as exc:
+            log(f"  [engagement] voice note failed: {exc}")
+
+    log_performance("telegram", "engagement", blueprint, None)
+    log("📊 engagement task complete ✅")
 
 
 def run_news_check() -> None:
@@ -2604,13 +2741,24 @@ def run_clone(spec: dict) -> None:
         return
     caption = edited.get("caption", caption)
     routing = store()["routing"]["cloned"]
+    rid, yid = None, None
     if routing.get("instagram_reel"):
         rid = publish_instagram_reel(str(out), caption)
         log_performance("instagram", "cloned", url, rid)
     if routing.get("youtube_short"):
-        publish_youtube_short(str(out), caption[:90], caption)
+        yid = publish_youtube_short(str(out), caption[:90], caption)
     if routing.get("telegram"):
-        tg_channel_file(str(out), caption, "video")
+        link = None
+        if store()["settings"].get("telegram_post_as_link", False):
+            if rid and (pl := get_instagram_permalink(rid)):
+                link = pl
+            elif yid:
+                link = f"https://youtube.com/shorts/{yid}"
+        
+        if link:
+            tg_channel_text(f"{caption}\n\n🔗 {link}")
+        else:
+            tg_channel_file(str(out), caption, "video")
 
 
 def run_link_parse(url: str) -> None:
@@ -2640,8 +2788,8 @@ def execute_task(row: sqlite3.Row) -> None:
             run_post_task(blueprint, ctype, slides=row["slides"] or 0)
         elif agent == "PDF_MAKER":
             run_pdf_task(blueprint)
-        elif agent == "TELEGRAM_POLL":
-            run_poll_task(blueprint)
+        elif agent == "TELEGRAM_ENGAGEMENT":
+            run_telegram_engagement_task(blueprint)
         elif agent == "POLL_ANSWER":
             tg_channel_text(blueprint)
         else:
@@ -2757,6 +2905,16 @@ def scheduler_loop() -> None:
         except Exception as exc:
             log(f"⚠️ scheduler tick error: {exc}")
             traceback.print_exc()
+
+        # RDP FOCUS FIX: Close Chrome when idle so the next task spawns it fresh.
+        # This completely bypasses the OS denying PyAutoGUI on disconnected sessions.
+        try:
+            st = requests.get(f"{BRIDGE}/status", timeout=5).json()
+            if st.get("extension_live") and st.get("pending_tasks") == 0:
+                requests.post(f"{BRIDGE}/close-gracefully", timeout=5)
+        except Exception:
+            pass
+
         time.sleep(30)
 
 

@@ -7,11 +7,6 @@ if exist "C:\Program Files\Google\Chrome\Application\chrome.exe" set CHROME_EXE=
 if exist "C:\Program Files (x86)\Google\Chrome\Application\chrome.exe" set CHROME_EXE="C:\Program Files (x86)\Google\Chrome\Application\chrome.exe"
 if exist "%LocalAppData%\Google\Chrome\Application\chrome.exe" set CHROME_EXE="%LocalAppData%\Google\Chrome\Application\chrome.exe"
 
-if "%CHROME_EXE%"=="" (
-    echo [ERROR] Google Chrome not found.
-    pause
-    exit /b 1
-)
 
 :: Set paths relative to this script
 set BASE_DIR=%~dp0

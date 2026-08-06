@@ -172,7 +172,15 @@ async function ensureTab(platform, targetUrl) {
 async function cleanupTab(tabId) {
   if (!tabId) return;
   try {
-    await chrome.tabs.get(tabId);                                  // still exists?
+    const tab = await chrome.tabs.get(tabId);                                  // still exists?
+    
+    // If this is the only tab left in the window, open a spare one
+    // so that removing it doesn't cause Chrome to exit entirely.
+    const allTabs = await chrome.tabs.query({ windowId: tab.windowId });
+    if (allTabs.length <= 1) {
+      await chrome.tabs.create({ windowId: tab.windowId, url: 'chrome://newtab/', active: false });
+    }
+    
     await chrome.tabs.update(tabId, { url: 'about:blank' });
     await sleep(500);                                              // navigate away cleanly
     await chrome.tabs.remove(tabId);
@@ -250,12 +258,20 @@ async function loadSelectors() {
  * ======================================================================= */
 
 async function startTask(task) {
-  log('task received:', task);
-  await setState({ busy: true, task, downloads: [] });
-  chrome.alarms.create('task-timeout', { delayInMinutes: TASK_TIMEOUT_MIN });
-  badge('▶', '#38bdf8');
-
   try {
+    if (task.type === 'close_browser') {
+      log('received close_browser task -> closing all tabs to gracefully exit Chrome');
+      const tabs = await chrome.tabs.query({});
+      for (const t of tabs) {
+        await chrome.tabs.remove(t.id).catch(() => {});
+      }
+      return; // Chrome dies, worker dies
+    }
+
+    await setState({ busy: true, task, downloads: [] });
+    chrome.alarms.create('task-timeout', { delayInMinutes: TASK_TIMEOUT_MIN });
+    badge('▶', '#38bdf8');
+
     const platform = TYPE_TO_PLATFORM[task.type];
     if (!platform) throw new Error('Unknown task type: ' + task.type);
 
