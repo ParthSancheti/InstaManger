@@ -1784,11 +1784,12 @@ def run_reel_task(blueprint: str, content_type: str) -> None:
     veo_prompt = plan.get("combined_veo_prompt", "")
     log("🎬 Sending God Prompt to Flow...")
     try:
-        # RDP FOCUS FIX: Kill Chrome and let bridge_task natively spawn it.
-        # A native OS launch forces the window to the absolute foreground layer,
-        # bypassing the PyAutoGUI OS lock on disconnected RDP sessions.
-        requests.post(f"{BRIDGE}/restart-chrome", timeout=5)
-        time.sleep(1) # Brief pause to let Chrome die completely
+        # RDP FOCUS FIX: Force Chrome to the OS foreground by opening a new tab
+        # (about:blank) natively. This bypasses the PyAutoGUI OS lock on 
+        # disconnected RDP sessions WITHOUT restarting the browser or losing state.
+        requests.post(f"{BRIDGE}/focus-chrome", json={"task_type": "video"}, timeout=15)
+        time.sleep(0.5) # Brief pause for the window to jump to front
+
     except Exception:
         pass
         
@@ -2906,14 +2907,8 @@ def scheduler_loop() -> None:
             log(f"⚠️ scheduler tick error: {exc}")
             traceback.print_exc()
 
-        # RDP FOCUS FIX: Close Chrome when idle so the next task spawns it fresh.
-        # This completely bypasses the OS denying PyAutoGUI on disconnected sessions.
-        try:
-            st = requests.get(f"{BRIDGE}/status", timeout=5).json()
-            if st.get("extension_live") and st.get("pending_tasks") == 0:
-                requests.post(f"{BRIDGE}/close-gracefully", timeout=5)
-        except Exception:
-            pass
+        # (Removed the close-gracefully RDP fix here since we now use /focus-chrome
+        # to natively foreground the window without closing the browser)
 
         time.sleep(30)
 

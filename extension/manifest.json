@@ -21,6 +21,7 @@
     "*://chat.openai.com/*",
     "*://claude.ai/*",
     "*://gemini.google.com/*",
+    "*://aistudio.google.com/*",
     "*://labs.google/*",
     "*://elevenlabs.io/*"
   ],

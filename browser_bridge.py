@@ -241,6 +241,7 @@ def launch_chrome(first_time: bool = False, urls: list[str] | None = None) -> bo
         "--no-first-run",
         "--no-default-browser-check",
         "--restore-last-session=false",
+        "--hide-crash-restore-bubble",
     ]
 
     if urls:
@@ -568,7 +569,23 @@ def submit_result():
             payload = _post_process(payload)
             print(f"[bridge] OK  task {task_id} SUCCESS")
         else:
-            print(f"[bridge] ERR task {task_id} FAILED: {payload.get('error')}")
+            err = payload.get('error')
+            print(f"[bridge] ERR task {task_id} FAILED: {err}")
+            
+            # --- AUTO SCREENSHOT ON FAILURE ---
+            try:
+                import pyautogui
+                from pathlib import Path
+                from datetime import datetime
+                fail_dir = Path(os.getcwd()) / "output" / "failures"
+                fail_dir.mkdir(parents=True, exist_ok=True)
+                ss_path = fail_dir / f"fail_{task_id}_{datetime.now().strftime('%H%M%S')}.png"
+                pyautogui.screenshot(str(ss_path))
+                print(f"[bridge] 📸 Screenshot saved to: {ss_path}")
+            except Exception as e:
+                print(f"[bridge] 📸 Screenshot failed: {e}")
+            # ----------------------------------
+            
     except Exception as exc:                    # post-processing must never lose a result
         payload["ok"] = False
         payload["error"] = f"post-process failed: {exc}"
@@ -597,7 +614,7 @@ def close_gracefully():
 @app.post("/restart-chrome")
 def restart_chrome_http():
     """Kill the automation Chrome and relaunch it (used by the Telegram panel)."""
-    global _chrome_procs
+    global _chrome_procs, _last_poll
     try:
         for pid in list(_automation_chrome_pids()):
             try:
@@ -613,10 +630,42 @@ def restart_chrome_http():
         except Exception:
             pass
     _chrome_procs = []
+    _last_poll = 0  # Force ensure_chrome to actually launch a new instance
     time.sleep(2.0)
     ok = ensure_chrome(quiet=True)
     return jsonify(ok=ok, extension_live=extension_live())
 
+
+
+
+@app.post("/focus-chrome")
+def focus_chrome_http():
+    """Brings Chrome to the absolute foreground by asking the OS to open a new tab.
+    This bypasses RDP focus stealing protections without having to close the browser."""
+    payload = request.get_json(force=True, silent=True) or {}
+    task_type = payload.get("task_type")
+    target_url = PLATFORM_URLS.get(task_type) if task_type else "chrome://newtab/"
+    
+    chrome = find_chrome()
+    if chrome:
+        try:
+            # We must pass the exact same profile dir and extension args so that 
+            # if Chrome is completely closed, it launches safely with the extension.
+            subprocess.Popen([
+                chrome,
+                f"--user-data-dir={PROFILE_DIR}",
+                f"--load-extension={EXTENSION_DIR}",
+                "--disable-features=DisableLoadExtensionCommandLineSwitch",
+                "--no-first-run",
+                "--no-default-browser-check",
+                "--restore-last-session=false",
+                "--hide-crash-restore-bubble",
+                target_url
+            ])
+            return jsonify(ok=True)
+        except Exception as e:
+            return jsonify(ok=False, error=str(e))
+    return jsonify(ok=False, error="Chrome not found")
 
 
 @app.post("/upload-direct")

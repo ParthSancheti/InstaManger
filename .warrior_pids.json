@@ -1,13 +1,13 @@
 {
-  "parent": 976,
-  "started": "2026-08-06T11:55:46.781604+05:30",
+  "parent": 4896,
+  "started": "2026-08-06T21:18:31.610715+05:30",
   "children": [
     {
-      "pid": 5488,
+      "pid": 4892,
       "name": "browser_bridge"
     },
     {
-      "pid": 1800,
+      "pid": 7056,
       "name": "telegram_bot"
     }
   ]

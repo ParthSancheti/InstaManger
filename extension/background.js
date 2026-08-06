@@ -129,13 +129,16 @@ async function ensureTab(platform, targetUrl) {
   const spec = PLATFORMS[platform];
   let tabs = await chrome.tabs.query({ url: spec.match });
 
-  // DEDUPE — keep the first tab, close every duplicate.
+  // DEDUPE — keep the active tab (the one Python just opened to steal focus), close the rest.
   if (tabs.length > 1) {
-    log(`found ${tabs.length} ${platform} tabs -> closing ${tabs.length - 1} duplicates`);
-    for (const extra of tabs.slice(1)) {
-      try { await chrome.tabs.remove(extra.id); } catch (e) {}
+    let target = tabs.find(t => t.active) || tabs[tabs.length - 1];
+    log(`found ${tabs.length} ${platform} tabs -> keeping active tab ${target.id}`);
+    for (const extra of tabs) {
+      if (extra.id !== target.id) {
+        try { await chrome.tabs.remove(extra.id); } catch (e) {}
+      }
     }
-    tabs = [tabs[0]];
+    tabs = [target];
   }
 
   let tab = tabs[0];
@@ -181,10 +184,15 @@ async function cleanupTab(tabId) {
       await chrome.tabs.create({ windowId: tab.windowId, url: 'chrome://newtab/', active: false });
     }
     
-    await chrome.tabs.update(tabId, { url: 'about:blank' });
-    await sleep(500);                                              // navigate away cleanly
+    try {
+      await chrome.scripting.executeScript({
+        target: { tabId: tabId },
+        func: () => { window.onbeforeunload = null; }
+      });
+    } catch(e) {}
+    
     await chrome.tabs.remove(tabId);
-    log('task tab parked on about:blank and closed');
+    log('task tab closed cleanly');
   } catch (e) {
     log('cleanupTab skipped:', e.message);
   }
